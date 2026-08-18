@@ -1,9 +1,4 @@
 
-/* ============================================================
-   EUSTATBANK
-   Front-end directo contra la API PXWeb/JSON-stat de Eustat
-   ============================================================ */
-
 const API = 'https://www.eustat.eus/bankupx/api/v1/es/DB';
 const DATA = './data/index_es.json';
 
@@ -12,135 +7,88 @@ const app = document.querySelector('#app');
 let catalog = [];
 
 let state = {
-  table: null,
   meta: null,
   selections: {},
   result: null,
-  query: null,
-  loading: false,
-  error: null
+  table: null
 };
 
 
-/* ============================================================
+/* =========================================================
    UTILIDADES
-   ============================================================ */
+========================================================= */
 
-function esc(value) {
-  return String(value ?? '')
-    .replace(/[&<>"]/g, char => ({
-      '&': '&amp;',
-      '<': '&lt;',
-      '>': '&gt;',
-      '"': '&quot;'
-    }[char]));
-}
-
+const esc = (s) =>
+  String(s ?? '').replace(/[&<>\"]/g, m => ({
+    '&': '&amp;',
+    '<': '&lt;',
+    '>': '&gt;',
+    '"': '&quot;'
+  }[m]));
 
 function parseDate(value) {
   if (!value) return 0;
 
-  const s = String(value).trim();
+  const d = new Date(value);
 
-  /* ISO */
-  const iso = Date.parse(s);
-
-  if (!Number.isNaN(iso)) {
-    return iso;
-  }
-
-  /*
-     Fechas tipo:
-     9/1/2023
-     17/2/2021
-     03/08/2026
-  */
-  const m = s.match(
-    /^(\d{1,2})[\/.-](\d{1,2})[\/.-](\d{4})/
-  );
-
-  if (m) {
-    const day = Number(m[1]);
-    const month = Number(m[2]) - 1;
-    const year = Number(m[3]);
-
-    return new Date(
-      year,
-      month,
-      day
-    ).getTime();
+  if (!Number.isNaN(d.getTime())) {
+    return d.getTime();
   }
 
   return 0;
 }
 
-
-function formatDate(value) {
+function fmtDate(value) {
   if (!value) return '';
 
-  const timestamp = parseDate(value);
+  const d = new Date(value);
 
-  if (!timestamp) {
+  if (Number.isNaN(d.getTime())) {
     return String(value);
   }
 
-  return new Date(timestamp).toLocaleDateString(
-    'es-ES'
-  );
+  return d.toLocaleString('es-ES', {
+    dateStyle: 'short',
+    timeStyle: 'short'
+  });
 }
 
 
-function isTimeVariable(variable) {
-  return Boolean(variable?.time);
-}
-
-
-/* ============================================================
-   CATÁLOGO
-   ============================================================ */
+/* =========================================================
+   CARGA DEL CATÁLOGO
+========================================================= */
 
 async function loadCatalog() {
-
-  const response = await fetch(DATA, {
-    cache: 'no-cache'
-  });
+  const response = await fetch(DATA);
 
   if (!response.ok) {
-    throw new Error(
-      `No se pudo cargar el catálogo (${response.status})`
-    );
+    throw new Error(`No se pudo cargar el catálogo (${response.status})`);
   }
 
   const json = await response.json();
 
-  catalog = Array.isArray(json.data)
-    ? json.data
-    : [];
+  catalog = Array.isArray(json.data) ? json.data : [];
 
   /*
-     Ordenamos aquí también, para que el catálogo ya nazca
-     correctamente ordenado.
-  */
-  catalog.sort(
-    (a, b) =>
-      parseDate(b.updated) -
-      parseDate(a.updated)
-  );
+   * Ordenamos aquí también, para que el catálogo ya esté
+   * preparado correctamente desde el principio.
+   */
+  catalog.sort((a, b) => {
+    return parseDate(b.updated) - parseDate(a.updated);
+  });
 }
 
 
-/* ============================================================
-   API - METADATOS
-   ============================================================ */
+/* =========================================================
+   API EUSTAT
+========================================================= */
 
 async function apiMeta(id) {
-
   const response = await fetch(
     `${API}/${encodeURIComponent(id)}`,
     {
-      method: 'GET',
       headers: {
-        Accept: 'application/json'
+        'Accept': 'application/json'
       }
     }
   );
@@ -149,7 +97,7 @@ async function apiMeta(id) {
 
   if (!response.ok) {
     throw new Error(
-      `Error obteniendo metadatos (${response.status}): ${text}`
+      `No se pudieron obtener los metadatos (${response.status}). ${text.slice(0, 500)}`
     );
   }
 
@@ -157,20 +105,15 @@ async function apiMeta(id) {
     return JSON.parse(text);
   } catch {
     throw new Error(
-      'La API devolvió unos metadatos que no son JSON válido.'
+      'Eustat no devolvió unos metadatos JSON válidos.'
     );
   }
 }
 
 
-/* ============================================================
-   API - DATOS
-   ============================================================ */
-
 async function apiData(id, query) {
-
   const body = {
-    query,
+    ...query,
     response: {
       format: 'json-stat'
     }
@@ -180,684 +123,497 @@ async function apiData(id, query) {
     `${API}/${encodeURIComponent(id)}`,
     {
       method: 'POST',
-
       headers: {
         'Content-Type': 'application/json',
-        Accept: 'application/json'
+        'Accept': 'application/json'
       },
-
       body: JSON.stringify(body)
     }
   );
 
   const text = await response.text();
 
-  let json = null;
+  if (!response.ok) {
+    throw new Error(
+      `La consulta ha fallado (HTTP ${response.status}). ${text.slice(0, 800)}`
+    );
+  }
 
   try {
-    json = JSON.parse(text);
+    return JSON.parse(text);
   } catch {
-    json = null;
-  }
-
-  if (!response.ok) {
-
-    const error = new Error(
-      `La API respondió HTTP ${response.status}`
+    throw new Error(
+      `Eustat respondió algo que no es JSON válido: ${text.slice(0, 800)}`
     );
-
-    error.status = response.status;
-    error.raw = text;
-    error.body = json;
-
-    throw error;
   }
-
-  if (!json) {
-
-    const error = new Error(
-      'La API respondió, pero no devolvió JSON válido.'
-    );
-
-    error.raw = text;
-
-    throw error;
-  }
-
-  return json;
 }
 
 
-/* ============================================================
+/* =========================================================
    JSON-STAT 1.2
-   ============================================================ */
+========================================================= */
 
 /*
-   Eustat devuelve algo de esta forma:
+ * Eustat devuelve:
 
-   {
-     "dataset": {
-       "dimension": {
-         "Sector": {
-           "category": {
-             "index": {
-               "100": 0
-             },
-             "label": {
-               "100": "1. Índice general"
-             }
-           }
-         }
-       },
-
-       "id": [
-         "Sector",
-         "Tipo de medida",
-         "Precios",
-         "periodo"
-       ],
-
-       "size": [
-         1,
-         1,
-         1,
-         5
-       ],
-
-       "value": [
-         100,
-         104.5,
-         107.8,
-         111.1,
-         115
-       ]
-     }
+ {
+   "dataset": {
+      "dimension": {...},
+      "id": [...],
+      "size": [...],
+      "value": [...]
    }
-*/
+ }
 
+ Por tanto primero tenemos que entrar en dataset.
+ */
 
-function getDataset(json) {
-
-  /*
-     Eustat normalmente envuelve el dataset en
-     { dataset: {...} }.
-
-     Dejamos también soporte para que venga directamente
-     como dataset.
-  */
-
-  if (
-    json &&
-    json.dataset &&
-    typeof json.dataset === 'object'
-  ) {
-    return json.dataset;
+function unwrapJsonStat(raw) {
+  if (raw && raw.dataset) {
+    return raw.dataset;
   }
 
-  if (
-    json &&
-    json.dimension &&
-    Array.isArray(json.id)
-  ) {
-    return json;
-  }
-
-  return null;
+  return raw;
 }
 
 
-function orderedCategoryCodes(dimension) {
-
-  const category =
-    dimension?.category || {};
-
-  const index =
-    category.index;
-
-  /*
-     Caso normal JSON-stat:
-       {
-         "100": 0,
-         "110": 1,
-         "120": 2
-       }
-  */
-
-  if (
-    index &&
-    typeof index === 'object' &&
-    !Array.isArray(index)
-  ) {
-
-    return Object.entries(index)
-      .sort(
-        (a, b) =>
-          Number(a[1]) - Number(b[1])
-      )
-      .map(entry => entry[0]);
+/*
+ * Obtiene las categorías de una dimensión respetando
+ * category.index de JSON-stat.
+ */
+function getDimensionCategories(dimension) {
+  if (!dimension || !dimension.category) {
+    return [];
   }
 
-  /*
-     Algunos JSON-stat pueden representar index como array.
-  */
+  const category = dimension.category;
+
+  const index = category.index || {};
+  const labels = category.label || {};
+
+  let keys = [];
 
   if (Array.isArray(index)) {
-    return index.slice();
-  }
-
-  /*
-     Si no hay index, intentamos usar label.
-  */
-
-  const labels =
-    category.label || {};
-
-  return Object.keys(labels);
-}
-
-
-function categoryLabel(dimension, code) {
-
-  const labels =
-    dimension?.category?.label || {};
-
-  if (
-    Object.prototype.hasOwnProperty.call(
-      labels,
-      code
-    )
+    keys = [...index];
+  } else if (
+    index &&
+    typeof index === 'object' &&
+    Object.keys(index).length
   ) {
-    return labels[code];
+    keys = Object.keys(index).sort(
+      (a, b) => Number(index[a]) - Number(index[b])
+    );
+  } else {
+    keys = Object.keys(labels);
   }
 
-  return code;
+  return keys.map(key => ({
+    code: key,
+    label: labels[key] ?? key
+  }));
 }
 
 
 /*
-   Convierte el array plano de JSON-stat en:
+ * Convierte JSON-stat 1.2 en una estructura sencilla
+ * que podemos utilizar para pintar la tabla.
+ */
+function normalizeJsonStat(raw) {
+  const j = unwrapJsonStat(raw);
 
-   [
-     {
-       "Sector": "...",
-       "periodo": "...",
-       "__value": 100
-     },
-     ...
-   ]
-
-   No asumimos absolutamente nada sobre las variables.
-*/
-
-function jsonStatToRows(json) {
-
-  const dataset = getDataset(json);
-
-  if (!dataset) {
-    throw new Error(
-      'La respuesta no contiene una estructura JSON-stat reconocible.'
-    );
+  if (!j || typeof j !== 'object') {
+    return null;
   }
 
-  const dimensions =
-    Array.isArray(dataset.id)
-      ? dataset.id
-      : [];
-
-  const sizes =
-    Array.isArray(dataset.size)
-      ? dataset.size
-      : [];
-
-  const values =
-    Array.isArray(dataset.value)
-      ? dataset.value
-      : [];
-
-  if (!dimensions.length) {
-    throw new Error(
-      'El JSON-stat no contiene dimensiones.'
-    );
+  if (!j.dimension) {
+    return null;
   }
 
-  if (!sizes.length) {
-    throw new Error(
-      'El JSON-stat no contiene "size".'
-    );
-  }
+  const ids = Array.isArray(j.id)
+    ? j.id
+    : Object.keys(j.dimension);
 
-  const dimensionData =
-    dimensions.map(id => {
+  const dimensions = ids.map(id => {
+    const dimension = j.dimension[id];
 
-      const dimension =
-        dataset.dimension?.[id];
+    const categories = getDimensionCategories(dimension);
 
-      const codes =
-        orderedCategoryCodes(dimension);
+    return {
+      id,
+      label: dimension?.label || id,
+      categories
+    };
+  });
 
-      return {
-        id,
-        dimension,
-        codes,
-        labels: codes.map(
-          code =>
-            categoryLabel(
-              dimension,
-              code
-            )
-        )
-      };
-    });
-
-
-  const rows = [];
-
-  /*
-     JSON-stat usa un array plano.
-     La última dimensión cambia más rápidamente.
-
-     Ejemplo:
-
-     size [2, 3]
-
-     A1
-     A2
-     A3
-     B1
-     B2
-     B3
-  */
-
-  function walk(
-    dimensionIndex,
-    coordinates,
-    flatIndex
-  ) {
-
-    if (
-      dimensionIndex ===
-      dimensionData.length
-    ) {
-
-      const row = {};
-
-      dimensionData.forEach(
-        (dimension, i) => {
-
-          const code =
-            dimension.codes[
-              coordinates[i]
-            ];
-
-          row[dimension.id] =
-            categoryLabel(
-              dimension.dimension,
-              code
-            );
-
-          row[`__code_${dimension.id}`] =
-            code;
-        }
-      );
-
-      row.__value =
-        values[flatIndex] ?? null;
-
-      rows.push(row);
-
-      return;
-    }
-
-    const size =
-      sizes[dimensionIndex];
-
-    for (
-      let i = 0;
-      i < size;
-      i++
-    ) {
-
-      /*
-         Factor de salto para calcular
-         la posición del array plano.
-      */
-
-      let multiplier = 1;
-
-      for (
-        let j = dimensionIndex + 1;
-        j < sizes.length;
-        j++
-      ) {
-        multiplier *= sizes[j];
-      }
-
-      const nextIndex =
-        flatIndex +
-        i * multiplier;
-
-      walk(
-        dimensionIndex + 1,
-        [...coordinates, i],
-        nextIndex
-      );
-    }
-  }
-
-  walk(
-    0,
-    [],
-    0
-  );
+  const sizes = Array.isArray(j.size)
+    ? j.size
+    : dimensions.map(d => d.categories.length);
 
   return {
-    dataset,
-    dimensions,
+    raw: j,
+    ids,
     sizes,
-    values,
-    dimensionData,
-    rows
+    dimensions,
+    values: j.value
   };
 }
 
 
-/* ============================================================
-   METADATOS → SELECCIONES INICIALES
-   ============================================================ */
+/* =========================================================
+   VARIABLES / PERIODOS
+========================================================= */
 
-function createInitialSelections(meta) {
+function isTimeVariable(variable) {
+  if (!variable) return false;
 
-  const selections = {};
-
-  const variables =
-    Array.isArray(meta?.variables)
-      ? meta.variables
-      : [];
-
-  variables.forEach(variable => {
-
-    const values =
-      Array.isArray(variable.values)
-        ? variable.values
-        : [];
-
-    if (!values.length) {
-      selections[variable.code] = [];
-      return;
-    }
-
-    /*
-       IMPORTANTE:
-
-       Para una variable temporal queremos el último
-       periodo disponible, no el primero.
-
-       Eustat puede devolver:
-
-       2010, 2011, ..., 2025
-
-       y también puede devolver otros formatos.
-
-       El metadata nos dice si es temporal mediante:
-
-       "time": true
-    */
-
-    if (isTimeVariable(variable)) {
-
-      selections[variable.code] = [
-        values[values.length - 1]
-      ];
-
-    } else {
-
-      /*
-         Para las demás variables mantenemos el
-         primer valor, que suele ser Total / CAE /
-         Índice general, etc., pero SIN asumir que
-         ese código significa algo concreto.
-      */
-
-      selections[variable.code] = [
-        values[0]
-      ];
-    }
-  });
-
-  return selections;
-}
-
-
-/* ============================================================
-   CONSTRUIR QUERY
-   ============================================================ */
-
-function buildQuery(meta) {
-
-  return (meta.variables || [])
-    .filter(variable =>
-      Array.isArray(variable.values) &&
-      variable.values.length
-    )
-    .map(variable => {
-
-      const selected =
-        state.selections[
-          variable.code
-        ] || [];
-
-      return {
-        code: variable.code,
-
-        selection: {
-          filter: 'item',
-          values: selected
-        }
-      };
-    });
-}
-
-
-/* ============================================================
-   ORDEN DE PERIODOS
-   ============================================================ */
-
-function orderedVariableValues(variable) {
-
-  const values =
-    Array.isArray(variable.values)
-      ? variable.values.slice()
-      : [];
-
-  if (!isTimeVariable(variable)) {
-    return values;
+  if (variable.time === true) {
+    return true;
   }
 
-  /*
-     Para periodo queremos:
+  const code = String(variable.code || '').toLowerCase();
+  const text = String(variable.text || '').toLowerCase();
 
-     2025
-     2024
-     2023
-     ...
-     2010
-
-     No intentamos convertir a número porque
-     puede haber periodos como:
-
-     2026-01
-     2025-4
-     2024T1
-
-     La prioridad es respetar el orden
-     que entrega Eustat y mostrarlo invertido.
-  */
-
-  return values.reverse();
+  return (
+    code === 'periodo' ||
+    code === 'period' ||
+    code.includes('period') ||
+    text === 'periodo' ||
+    text === 'período'
+  );
 }
 
 
-/* ============================================================
-   RENDER DE FILTROS
-   ============================================================ */
+/*
+ * Devuelve los valores de una variable.
+ *
+ * Para periodo:
+ *     2025
+ *     2024
+ *     2023
+ *     ...
+ *
+ * Para el resto mantiene el orden de Eustat.
+ */
+function getVariableValues(variable) {
+  const values = variable.values || [];
+  const texts = variable.valueTexts || [];
 
-function renderFilters() {
+  const items = values.map((code, index) => ({
+    code,
+    text: texts[index] ?? code,
+    originalIndex: index
+  }));
 
-  const container =
-    document.querySelector(
-      '#filters'
-    );
+  if (isTimeVariable(variable)) {
+    items.sort((a, b) => {
+      return String(b.code).localeCompare(
+        String(a.code),
+        'es',
+        {
+          numeric: true,
+          sensitivity: 'base'
+        }
+      );
+    });
+  }
 
-  if (!container) return;
-
-  container.innerHTML =
-    (state.meta.variables || [])
-      .map(
-        variable =>
-          renderVariable(variable)
-      )
-      .join('');
-
-  attachFilterEvents();
+  return items;
 }
 
 
-function renderVariable(variable) {
+/*
+ * Inicialización:
+ *
+ * - Variables normales: primer valor.
+ * - Periodo: último periodo disponible.
+ *
+ * Como getVariableValues() ordena periodo de mayor a menor,
+ * el primer elemento es el más reciente.
+ */
+function initSelections() {
+  state.selections = {};
 
-  const code =
-    variable.code;
+  for (const variable of state.meta.variables || []) {
+    const values = getVariableValues(variable);
 
-  const values =
-    orderedVariableValues(variable);
+    if (!values.length) {
+      state.selections[variable.code] = [];
+      continue;
+    }
+
+    state.selections[variable.code] = [
+      values[0].code
+    ];
+  }
+}
+
+
+/* =========================================================
+   ROUTER
+========================================================= */
+
+function route() {
+  const hash = location.hash || '#/';
+
+  const match = hash.match(/^#\/table\/(.+)$/);
+
+  if (match) {
+    openTable(decodeURIComponent(match[1]));
+    return;
+  }
+
+  renderCatalog();
+}
+
+
+/* =========================================================
+   TABLA
+========================================================= */
+
+async function openTable(id) {
+  const table = catalog.find(x => x.id === id);
+
+  if (!table) {
+    location.hash = '#/';
+    return;
+  }
+
+  state = {
+    meta: null,
+    selections: {},
+    result: null,
+    table
+  };
+
+  renderTableShell();
+
+  try {
+    state.meta = await apiMeta(id);
+
+    initSelections();
+
+    renderTable();
+
+  } catch (error) {
+
+    app.innerHTML = `
+      <main class="catalog">
+        <div class="catalog-inner">
+          <div class="error">
+            ${esc(error.message)}
+          </div>
+        </div>
+      </main>
+    `;
+  }
+}
+
+
+/* =========================================================
+   ESTRUCTURA DE LA PÁGINA DE TABLA
+========================================================= */
+
+function renderTableShell() {
+
+  app.innerHTML = `
+    <div class="shell">
+
+      <aside class="rail">
+
+        <button class="active">
+          <span class="icon">☷</span>
+          Filter
+        </button>
+
+        <button>
+          <span class="icon">▥</span>
+          Display
+        </button>
+
+        <button>
+          <span class="icon">↕</span>
+          Edit
+        </button>
+
+        <button>
+          <span class="icon">⇩</span>
+          Save
+        </button>
+
+        <button>
+          <span class="icon">?</span>
+          Help
+        </button>
+
+      </aside>
+
+
+      <aside class="filter-pane" id="filters">
+
+        <div class="filter-head">
+          <h2>Seleccionar datos</h2>
+        </div>
+
+      </aside>
+
+
+      <main class="main" id="tablemain"></main>
+
+    </div>
+  `;
+}
+
+
+/* =========================================================
+   RENDER TABLA
+========================================================= */
+
+function renderTable() {
+
+  const meta = state.meta;
+
+  document.querySelector('#filters').innerHTML = `
+    <div class="filter-head">
+      <h2>Seleccionar datos</h2>
+      <button onclick="location.hash='#/'">
+        Volver
+      </button>
+    </div>
+
+    ${(meta.variables || [])
+      .map(variable => filterCard(variable))
+      .join('')
+    }
+  `;
+
+
+  document.querySelector('#tablemain').innerHTML = `
+
+    <div class="notice">
+      ⓘ Consulta datos directamente desde la API pública de Eustat.
+    </div>
+
+    <div class="breadcrumbs">
+      <a href="#/">Tablas</a>
+     　›　
+      ${esc(meta.title || state.table.title)}
+    </div>
+
+    <section class="hero">
+
+      <h1>
+        ${esc(state.table.title || meta.title)}
+      </h1>
+
+      <div class="meta">
+
+        <span>
+          Actualizada:
+          ${esc(fmtDate(state.table.updated))}
+        </span>
+
+      </div>
+
+    </section>
+
+
+    <div class="toolbar">
+
+      <button onclick="runQuery()">
+        Mostrar tabla
+      </button>
+
+      <button onclick="download('csv')">
+        Descargar CSV
+      </button>
+
+      <button onclick="download('xlsx')">
+        Excel
+      </button>
+
+      <button onclick="copyQuery()">
+        Copiar consulta API
+      </button>
+
+    </div>
+
+
+    <div id="result">
+
+      <div class="empty">
+        Selecciona los datos y pulsa
+        <strong>Mostrar tabla</strong>.
+      </div>
+
+    </div>
+  `;
+}
+
+
+/* =========================================================
+   TARJETA DE FILTRO
+========================================================= */
+
+function filterCard(variable) {
+
+  const values = getVariableValues(variable);
 
   const selected =
-    state.selections[code] || [];
-
-  const count =
-    selected.length;
-
-  const total =
-    values.length;
-
-  const safeId =
-    'var-' +
-    btoa(
-      unescape(
-        encodeURIComponent(code)
-      )
-    )
-      .replace(/[^a-zA-Z0-9]/g, '')
-      .slice(0, 30);
+    state.selections[variable.code] || [];
 
 
   return `
-    <section
-      class="filter-card"
-      data-variable="${esc(code)}"
-    >
+    <section class="card">
 
-      <div class="filter-card-header">
+      <h3>
+        ${esc(variable.text || variable.code)}
+      </h3>
 
-        <div>
-          <h2>
-            ${esc(variable.text || code)}
-          </h2>
+      <span class="pill">
+        ${selected.length} de ${values.length} seleccionados
+      </span>
 
-          <span class="selection-count">
-            ${count} de ${total} seleccionados
-          </span>
+
+      <div class="selection">
+
+        <div class="select-actions">
+
+          <button onclick='selectAll(${JSON.stringify(variable.code)})'>
+            Todos
+          </button>
+
+          <button onclick='clearAll(${JSON.stringify(variable.code)})'>
+            Ninguno
+          </button>
+
         </div>
 
-      </div>
 
+        <div class="value-list">
 
-      <div class="filter-actions">
+          ${values.map(item => `
 
-        <button
-          type="button"
-          class="filter-action"
-          data-action="all"
-          data-code="${esc(code)}"
-        >
-          Todos
-        </button>
+            <label class="value-row">
 
-        <button
-          type="button"
-          class="filter-action"
-          data-action="none"
-          data-code="${esc(code)}"
-        >
-          Ninguno
-        </button>
+              <input
+                type="checkbox"
+                ${selected.includes(item.code) ? 'checked' : ''}
+                onchange='toggleValue(
+                  ${JSON.stringify(variable.code)},
+                  ${JSON.stringify(item.code)},
+                  this.checked
+                )'
+              >
 
-      </div>
+              <span>
+                ${esc(item.text)}
+              </span>
 
+            </label>
 
-      ${
-        values.length > 12
-          ? `
-            <input
-              class="filter-search"
-              type="search"
-              placeholder="Buscar..."
-              data-search="${esc(code)}"
-              autocomplete="off"
-            >
-          `
-          : ''
-      }
+          `).join('')}
 
-
-      <div
-        class="filter-options"
-        id="${safeId}"
-      >
-
-        ${values
-          .map(
-            value => {
-
-              const checked =
-                selected.includes(
-                  value
-                );
-
-              const label =
-                variable.valueTexts?.[
-                  variable.values.indexOf(
-                    value
-                  )
-                ] ?? value;
-
-              return `
-                <label
-                  class="filter-option"
-                  data-option
-                  data-label="${esc(
-                    String(label)
-                  ).toLocaleLowerCase('es')}"
-                >
-
-                  <input
-                    type="checkbox"
-                    class="filter-checkbox"
-                    data-variable="${esc(code)}"
-                    value="${esc(value)}"
-                    ${checked ? 'checked' : ''}
-                  >
-
-                  <span class="checkbox-box"></span>
-
-                  <span class="filter-label">
-                    ${esc(label)}
-                  </span>
-
-                </label>
-              `;
-            }
-          )
-          .join('')}
+        </div>
 
       </div>
 
@@ -866,346 +622,121 @@ function renderVariable(variable) {
 }
 
 
-/* ============================================================
-   EVENTOS DE FILTROS
-   ============================================================ */
+/* =========================================================
+   SELECCIONES
+========================================================= */
 
-function attachFilterEvents() {
+function toggleValue(code, value, checked) {
 
-  document
-    .querySelectorAll(
-      '.filter-checkbox'
-    )
-    .forEach(input => {
-
-      input.addEventListener(
-        'change',
-        () => {
-
-          const code =
-            input.dataset.variable;
-
-          const checked =
-            [
-              ...document.querySelectorAll(
-                `.filter-checkbox[data-variable="${CSS.escape(code)}"]:checked`
-              )
-            ].map(
-              element =>
-                element.value
-            );
-
-          state.selections[code] =
-            checked;
-
-          updateSelectionCount(code);
-
-        }
-      );
-    });
-
-
-  document
-    .querySelectorAll(
-      '[data-action]'
-    )
-    .forEach(button => {
-
-      button.addEventListener(
-        'click',
-        () => {
-
-          const code =
-            button.dataset.code;
-
-          const action =
-            button.dataset.action;
-
-          const variable =
-            state.meta.variables.find(
-              v => v.code === code
-            );
-
-          if (!variable) return;
-
-          if (action === 'all') {
-
-            state.selections[code] =
-              variable.values.slice();
-
-          }
-
-          if (action === 'none') {
-
-            state.selections[code] = [];
-          }
-
-          renderFilters();
-        }
-      );
-    });
-
-
-  document
-    .querySelectorAll(
-      '.filter-search'
-    )
-    .forEach(input => {
-
-      input.addEventListener(
-        'input',
-        () => {
-
-          const term =
-            input.value
-              .trim()
-              .toLocaleLowerCase('es');
-
-          const code =
-            input.dataset.search;
-
-          document
-            .querySelectorAll(
-              `.filter-card[data-variable="${CSS.escape(code)}"] [data-option]`
-            )
-            .forEach(option => {
-
-              const label =
-                option.dataset.label || '';
-
-              option.hidden =
-                Boolean(
-                  term &&
-                  !label.includes(term)
-                );
-            });
-        }
-      );
-    });
-}
-
-
-function updateSelectionCount(code) {
-
-  const card =
-    document.querySelector(
-      `.filter-card[data-variable="${CSS.escape(code)}"]`
-    );
-
-  if (!card) return;
-
-  const selected =
+  state.selections[code] =
     state.selections[code] || [];
 
-  const badge =
-    card.querySelector(
-      '.selection-count'
-    );
 
-  const variable =
-    state.meta.variables.find(
-      v => v.code === code
-    );
+  if (
+    checked &&
+    !state.selections[code].includes(value)
+  ) {
+    state.selections[code].push(value);
+  }
 
-  if (!badge || !variable) return;
 
-  badge.textContent =
-    `${selected.length} de ${variable.values.length} seleccionados`;
+  if (!checked) {
+
+    state.selections[code] =
+      state.selections[code]
+        .filter(x => x !== value);
+
+  }
+
+
+  renderFiltersOnly();
 }
 
 
-/* ============================================================
-   TABLA
-   ============================================================ */
+function renderFiltersOnly() {
 
-function renderResult(result) {
+  document.querySelector('#filters').innerHTML = `
 
-  const container =
-    document.querySelector(
-      '#result'
-    );
+    <div class="filter-head">
+      <h2>Seleccionar datos</h2>
 
-  if (!container) return;
-
-  if (!result) {
-
-    container.innerHTML = `
-      <div class="result-empty">
-        Pulsa <strong>Mostrar tabla</strong>
-        para consultar los datos.
-      </div>
-    `;
-
-    return;
-  }
-
-  const {
-    rows,
-    dimensions
-  } = result;
-
-  if (!rows.length) {
-
-    container.innerHTML = `
-      <div class="result-empty">
-        La API no devolvió datos para
-        la selección realizada.
-      </div>
-    `;
-
-    return;
-  }
-
-
-  /*
-     Para que la tabla sea genérica:
-
-     columnas = dimensiones + Valor
-
-     Esto funciona tanto para:
-
-     Sector + periodo
-
-     como para:
-
-     Sexo + territorio + edad + periodo
-
-     sin conocer previamente la estructura
-     de ninguna tabla.
-  */
-
-  const headers =
-    dimensions
-      .map(
-        dimension =>
-          state.meta.variables.find(
-            v => v.code === dimension
-          )?.text || dimension
-      );
-
-
-  container.innerHTML = `
-    <div class="table-wrapper">
-
-      <table class="data-table">
-
-        <thead>
-
-          <tr>
-
-            ${headers
-              .map(
-                header =>
-                  `<th>${esc(header)}</th>`
-              )
-              .join('')}
-
-            <th>Valor</th>
-
-          </tr>
-
-        </thead>
-
-
-        <tbody>
-
-          ${rows
-            .map(
-              row => `
-
-                <tr>
-
-                  ${dimensions
-                    .map(
-                      dimension =>
-                        `<td>${esc(
-                          row[dimension]
-                        )}</td>`
-                    )
-                    .join('')}
-
-                  <td class="value-cell">
-                    ${formatValue(
-                      row.__value
-                    )}
-                  </td>
-
-                </tr>
-
-              `
-            )
-            .join('')}
-
-        </tbody>
-
-      </table>
-
+      <button onclick="location.hash='#/'">
+        Volver
+      </button>
     </div>
+
+    ${(state.meta.variables || [])
+      .map(variable => filterCard(variable))
+      .join('')
+    }
   `;
 }
 
 
-function formatValue(value) {
+function selectAll(code) {
 
-  if (
-    value === null ||
-    value === undefined ||
-    value === ''
-  ) {
-    return '…';
-  }
-
-  if (
-    typeof value === 'number'
-  ) {
-
-    return value.toLocaleString(
-      'es-ES',
-      {
-        maximumFractionDigits: 10
-      }
+  const variable =
+    state.meta.variables.find(
+      x => x.code === code
     );
-  }
 
-  return esc(value);
+  if (!variable) return;
+
+  const values =
+    getVariableValues(variable);
+
+  state.selections[code] =
+    values.map(x => x.code);
+
+  renderFiltersOnly();
 }
 
 
-/* ============================================================
-   CONSULTAR
-   ============================================================ */
+function clearAll(code) {
+
+  state.selections[code] = [];
+
+  renderFiltersOnly();
+}
+
+
+/* =========================================================
+   QUERY
+========================================================= */
+
+function buildQuery() {
+
+  return {
+
+    query:
+      (state.meta.variables || [])
+        .filter(variable =>
+          state.selections[variable.code]?.length
+        )
+        .map(variable => ({
+
+          code: variable.code,
+
+          selection: {
+            filter: 'item',
+            values:
+              state.selections[variable.code]
+          }
+
+        }))
+
+  };
+}
+
+
+/* =========================================================
+   CONSULTAR DATOS
+========================================================= */
 
 async function runQuery() {
 
   const result =
-    document.querySelector(
-      '#result'
-    );
-
-  const errorBox =
-    document.querySelector(
-      '#error'
-    );
-
-  const rawBox =
-    document.querySelector(
-      '#raw-response'
-    );
-
-  if (!result) return;
-
-  state.loading = true;
-  state.error = null;
-
-  if (errorBox) {
-    errorBox.innerHTML = '';
-    errorBox.hidden = true;
-  }
-
-  if (rawBox) {
-    rawBox.innerHTML = '';
-    rawBox.hidden = true;
-  }
+    document.querySelector('#result');
 
   result.innerHTML = `
     <div class="loading">
@@ -1214,611 +745,398 @@ async function runQuery() {
   `;
 
 
-  const query =
-    buildQuery(state.meta);
-
-  state.query = {
-    query,
-    response: {
-      format: 'json-stat'
-    }
-  };
-
-
   try {
 
-    const json =
+    const query = buildQuery();
+
+    state.result =
       await apiData(
         state.table.id,
         query
       );
 
-    /*
-       Guardamos EXACTAMENTE la respuesta
-       recibida de Eustat para poder inspeccionarla.
-    */
 
-    state.rawResponse =
-      json;
+    const normalized =
+      normalizeJsonStat(state.result);
 
-    const parsed =
-      jsonStatToRows(json);
 
-    state.result =
-      parsed;
+    if (!normalized) {
 
-    renderResult(parsed);
+      result.innerHTML = `
+        <div class="error">
 
-    renderQuery();
+          <strong>
+            Eustat no devolvió un JSON-stat reconocible.
+          </strong>
 
-    if (rawBox) {
-      rawBox.innerHTML =
-        `<pre>${esc(
-          JSON.stringify(
-            json,
-            null,
-            2
-          )
-        )}</pre>`;
+          <details>
+            <summary>Respuesta recibida</summary>
 
-      rawBox.hidden = false;
+            <pre>${esc(
+              JSON.stringify(
+                state.result,
+                null,
+                2
+              )
+            )}</pre>
+
+          </details>
+
+        </div>
+      `;
+
+      return;
     }
 
-    enableExportButtons();
+
+    result.innerHTML =
+      renderJsonStat(normalized);
+
 
   } catch (error) {
 
-    state.error =
-      error;
+    result.innerHTML = `
+      <div class="error">
 
-    result.innerHTML = '';
-
-    if (errorBox) {
-
-      const details =
-        error.raw ||
-        error.body ||
-        '';
-
-      errorBox.innerHTML = `
-
-        <div class="error-title">
+        <strong>
           Error al consultar Eustat
-        </div>
+        </strong>
 
         <p>
-          ${esc(
-            error.message ||
-            'Error desconocido'
-          )}
+          ${esc(error.message)}
         </p>
 
-        ${
-          error.status
-            ? `
-              <p>
-                <strong>HTTP:</strong>
-                ${esc(error.status)}
-              </p>
-            `
-            : ''
-        }
+        <details>
+          <summary>
+            Consulta enviada
+          </summary>
 
-        ${
-          details
-            ? `
-              <details>
-                <summary>
-                  Respuesta de la API
-                </summary>
+          <pre>${esc(
+            JSON.stringify(
+              buildQuery(),
+              null,
+              2
+            )
+          )}</pre>
 
-                <pre>${esc(
-                  typeof details === 'string'
-                    ? details
-                    : JSON.stringify(
-                        details,
-                        null,
-                        2
-                      )
-                )}</pre>
+        </details>
 
-              </details>
-            `
-            : ''
-        }
-
-      `;
-
-      errorBox.hidden = false;
-    }
-
-    renderQuery();
+      </div>
+    `;
   }
-
-  state.loading = false;
 }
 
 
-/* ============================================================
-   MOSTRAR QUERY
-   ============================================================ */
+/* =========================================================
+   PINTAR JSON-STAT
+========================================================= */
 
-function renderQuery() {
-
-  const box =
-    document.querySelector(
-      '#query-sent'
-    );
-
-  if (!box || !state.query) {
-    return;
-  }
-
-  box.innerHTML = `
-    <details>
-
-      <summary>
-        Consulta enviada
-      </summary>
-
-      <pre>${esc(
-        JSON.stringify(
-          state.query,
-          null,
-          2
-        )
-      )}</pre>
-
-    </details>
-  `;
-}
-
-
-/* ============================================================
-   EXPORTAR CSV
-   ============================================================ */
-
-function exportCSV() {
-
-  if (
-    !state.result ||
-    !state.result.rows.length
-  ) {
-    return;
-  }
+function renderJsonStat(data) {
 
   const {
-    rows,
-    dimensions
-  } = state.result;
-
-  const headers = [
-    ...dimensions,
-    'Valor'
-  ];
-
-  const lines = [
-    headers
-      .map(csvEscape)
-      .join(';')
-  ];
+    ids,
+    sizes,
+    dimensions,
+    values
+  } = data;
 
 
-  rows.forEach(row => {
+  if (
+    !ids.length ||
+    !dimensions.length
+  ) {
 
-    lines.push(
-      [
-        ...dimensions.map(
-          d => row[d]
-        ),
-        row.__value
-      ]
-        .map(csvEscape)
-        .join(';')
-    );
-  });
+    return `
+      <div class="empty">
+        El JSON-stat no contiene dimensiones.
+      </div>
+    `;
+  }
 
 
-  const blob =
-    new Blob(
-      [
-        '\uFEFF' +
-        lines.join('\n')
-      ],
-      {
-        type:
-          'text/csv;charset=utf-8'
+  /*
+   * Generamos todas las coordenadas.
+   *
+   * Ejemplo:
+   *
+   * dimensión A: 2 valores
+   * dimensión B: 3 valores
+   *
+   * 2 × 3 = 6 celdas
+   */
+
+  const rows = [];
+
+
+  function generateCoordinates(
+    dimension,
+    prefix = []
+  ) {
+
+    if (dimension === ids.length) {
+
+      rows.push(prefix);
+
+      return;
+    }
+
+
+    for (
+      let i = 0;
+      i < sizes[dimension];
+      i++
+    ) {
+
+      generateCoordinates(
+        dimension + 1,
+        [...prefix, i]
+      );
+    }
+  }
+
+
+  generateCoordinates(0);
+
+
+  let html = `
+
+    <div class="table-wrap">
+
+      <table class="result-table">
+
+        <thead>
+
+          <tr>
+
+            ${dimensions.map(d => `
+              <th>
+                ${esc(d.label)}
+              </th>
+            `).join('')}
+
+            <th>
+              Valor
+            </th>
+
+          </tr>
+
+        </thead>
+
+        <tbody>
+  `;
+
+
+  rows
+    .slice(0, 5000)
+    .forEach(coordinates => {
+
+      /*
+       * JSON-stat utiliza orden row-major.
+       *
+       * Calculamos aquí el índice plano.
+       */
+
+      let flatIndex = 0;
+
+      for (
+        let i = 0;
+        i < coordinates.length;
+        i++
+      ) {
+
+        flatIndex =
+          flatIndex * sizes[i] +
+          coordinates[i];
       }
-    );
 
 
-  const url =
-    URL.createObjectURL(blob);
+      let value = '';
 
-  const link =
-    document.createElement('a');
 
-  link.href = url;
+      if (Array.isArray(values)) {
 
-  link.download =
-    `${state.table.id
-      .replace(/\.px$/i, '')
-    }.csv`;
+        value =
+          values[flatIndex] ?? '';
 
-  link.click();
+      } else if (
+        values &&
+        typeof values === 'object'
+      ) {
 
-  URL.revokeObjectURL(url);
+        value =
+          values[String(flatIndex)] ?? '';
+
+      }
+
+
+      html += `
+
+        <tr>
+
+          ${coordinates.map((position, i) => {
+
+            const category =
+              dimensions[i].categories[position];
+
+            return `
+              <td>
+                ${esc(category?.label ?? '')}
+              </td>
+            `;
+
+          }).join('')}
+
+
+          <td>
+            ${esc(value)}
+          </td>
+
+        </tr>
+      `;
+    });
+
+
+  html += `
+
+        </tbody>
+
+      </table>
+
+    </div>
+  `;
+
+
+  if (rows.length > 5000) {
+
+    html += `
+      <p class="status">
+        Mostrando 5.000 de
+        ${rows.length.toLocaleString('es-ES')}
+        celdas.
+      </p>
+    `;
+  }
+
+
+  return html;
 }
 
 
-function csvEscape(value) {
+/* =========================================================
+   DESCARGAS
+========================================================= */
 
-  const text =
-    String(value ?? '');
+async function download(format) {
 
-  return `"${text
-    .replace(/"/g, '""')}"`;
+  if (!state.table) return;
+
+
+  try {
+
+    const response =
+      await fetch(
+        `${API}/${encodeURIComponent(state.table.id)}`,
+        {
+          method: 'POST',
+
+          headers: {
+            'Content-Type':
+              'application/json',
+
+            'Accept':
+              'application/octet-stream'
+          },
+
+          body: JSON.stringify({
+            ...buildQuery(),
+
+            response: {
+              format
+            }
+          })
+        }
+      );
+
+
+    if (!response.ok) {
+
+      const text =
+        await response.text();
+
+      throw new Error(
+        `Descarga fallida (HTTP ${response.status}). ${text.slice(0, 500)}`
+      );
+    }
+
+
+    const blob =
+      await response.blob();
+
+
+    const url =
+      URL.createObjectURL(blob);
+
+
+    const a =
+      document.createElement('a');
+
+
+    a.href = url;
+
+
+    a.download =
+      `${state.table.id}.${format === 'xlsx' ? 'xlsx' : 'csv'}`;
+
+
+    document.body.appendChild(a);
+
+    a.click();
+
+    a.remove();
+
+
+    URL.revokeObjectURL(url);
+
+  } catch (error) {
+
+    alert(error.message);
+
+  }
 }
 
 
-/* ============================================================
+/* =========================================================
    COPIAR QUERY
-   ============================================================ */
+========================================================= */
 
 async function copyQuery() {
 
-  if (!state.query) return;
-
-  const text =
+  const query =
     JSON.stringify(
-      state.query,
+      buildQuery(),
       null,
       2
     );
 
-  try {
 
-    await navigator.clipboard.writeText(
-      text
-    );
+  await navigator.clipboard.writeText(
 
-    const button =
-      document.querySelector(
-        '#copy-query'
-      );
+    `${API}/${state.table.id}
 
-    if (button) {
+POST body:
 
-      const original =
-        button.textContent;
+${query}`
 
-      button.textContent =
-        'Copiado ✓';
+  );
 
-      setTimeout(
-        () => {
-          button.textContent =
-            original;
-        },
-        1500
-      );
-    }
 
-  } catch {
-
-    window.prompt(
-      'Copia la consulta:',
-      text
-    );
-  }
+  alert('Consulta API copiada.');
 }
 
 
-/* ============================================================
-   BOTONES DE RESULTADOS
-   ============================================================ */
-
-function enableExportButtons() {
-
-  const csv =
-    document.querySelector(
-      '#download-csv'
-    );
-
-  if (csv) {
-    csv.disabled =
-      !state.result;
-  }
-}
-
-
-/* ============================================================
-   PÁGINA DE TABLA
-   ============================================================ */
-
-async function openTable(id) {
-
-  const table =
-    catalog.find(
-      item => item.id === id
-    );
-
-  if (!table) {
-
-    location.hash = '#/';
-
-    return;
-  }
-
-
-  state = {
-    table,
-    meta: null,
-    selections: {},
-    result: null,
-    query: null,
-    loading: true,
-    error: null
-  };
-
-
-  renderTableShell();
-
-
-  try {
-
-    /*
-       PRIMERO:
-
-       GET metadata.
-
-       Nunca inventamos códigos, categorías
-       ni nombres de variables.
-    */
-
-    state.meta =
-      await apiMeta(id);
-
-    /*
-       Después construimos la selección
-       inicial a partir del metadata real.
-    */
-
-    state.selections =
-      createInitialSelections(
-        state.meta
-      );
-
-    renderFilters();
-
-    renderQuery();
-
-    await runQuery();
-
-  } catch (error) {
-
-    const errorBox =
-      document.querySelector(
-        '#error'
-      );
-
-    if (errorBox) {
-
-      errorBox.innerHTML = `
-        <div class="error-title">
-          Error al obtener los metadatos
-        </div>
-
-        <p>
-          ${esc(
-            error.message
-          )}
-        </p>
-      `;
-
-      errorBox.hidden = false;
-    }
-  }
-
-  state.loading = false;
-}
-
-
-/* ============================================================
-   ESTRUCTURA DE PÁGINA DE TABLA
-   ============================================================ */
-
-function renderTableShell() {
-
-  const title =
-    state.table.title ||
-    state.table.text ||
-    state.table.id;
-
-
-  app.innerHTML = `
-
-    <main class="table-page">
-
-      <div class="table-page-inner">
-
-        <nav class="breadcrumbs">
-
-          <a href="#/">
-            Tablas
-          </a>
-
-          <span>›</span>
-
-          <span>
-            ${esc(title)}
-          </span>
-
-        </nav>
-
-
-        <div class="table-heading">
-
-          <h1>
-            ${esc(title)}
-          </h1>
-
-          ${
-            state.table.updated
-              ? `
-                <div class="updated">
-                  Actualizada:
-                  ${esc(
-                    formatDate(
-                      state.table.updated
-                    )
-                  )}
-                </div>
-              `
-              : ''
-          }
-
-        </div>
-
-
-        <div class="api-info">
-          ⓘ Consulta datos directamente
-          desde la API pública de Eustat.
-        </div>
-
-
-        <div class="table-layout">
-
-
-          <!-- ================================================
-               SIDEBAR
-               ================================================ -->
-
-          <aside class="filters-panel">
-
-            <div class="filters-title">
-              <h2>
-                Seleccionar datos
-              </h2>
-            </div>
-
-            <div id="filters"></div>
-
-          </aside>
-
-
-          <!-- ================================================
-               CONTENIDO
-               ================================================ -->
-
-          <section class="table-content">
-
-
-            <div class="table-actions">
-
-              <button
-                id="show-table"
-                class="primary-button"
-                type="button"
-              >
-                Mostrar tabla
-              </button>
-
-              <button
-                id="download-csv"
-                class="secondary-button"
-                type="button"
-                disabled
-              >
-                Descargar CSV
-              </button>
-
-              <button
-                id="copy-query"
-                class="secondary-button"
-                type="button"
-              >
-                Copiar consulta API
-              </button>
-
-            </div>
-
-
-            <div
-              id="error"
-              class="error-box"
-              hidden
-            ></div>
-
-
-            <div
-              id="result"
-              class="result-box"
-            >
-              <div class="loading">
-                Cargando metadatos de Eustat…
-              </div>
-            </div>
-
-
-            <div
-              id="query-sent"
-              class="query-box"
-            ></div>
-
-
-            <details
-              id="raw-response"
-              class="raw-response"
-              hidden
-            >
-            </details>
-
-
-          </section>
-
-        </div>
-
-      </div>
-
-    </main>
-  `;
-
-
-  document
-    .querySelector(
-      '#show-table'
-    )
-    .addEventListener(
-      'click',
-      runQuery
-    );
-
-
-  document
-    .querySelector(
-      '#download-csv'
-    )
-    .addEventListener(
-      'click',
-      exportCSV
-    );
-
-
-  document
-    .querySelector(
-      '#copy-query'
-    )
-    .addEventListener(
-      'click',
-      copyQuery
-    );
-}
-
-
-/* ============================================================
+/* =========================================================
    CATÁLOGO
-   ============================================================ */
+========================================================= */
 
 function renderCatalog() {
 
@@ -1832,9 +1150,9 @@ function renderCatalog() {
           Eustatbank
         </h1>
 
-        <p class="catalog-intro">
-          Explora las tablas estadísticas
-          de Eustat.
+        <p>
+          Explora las tablas estadísticas de Eustat
+          con una experiencia inspirada en PxWeb.
         </p>
 
 
@@ -1842,7 +1160,6 @@ function renderCatalog() {
 
           <input
             id="q"
-            type="search"
             placeholder="Buscar por título, operación, variable o palabra clave…"
             autocomplete="off"
           >
@@ -1852,7 +1169,7 @@ function renderCatalog() {
 
         <div class="catalog-grid">
 
-          <aside class="catalog-filters">
+          <aside class="filters">
 
             <div class="filter-block">
               Contenido
@@ -1873,14 +1190,12 @@ function renderCatalog() {
           </aside>
 
 
-          <section class="catalog-results">
+          <section>
 
             <div class="results-head">
 
               <strong id="count">
-                ${catalog.length.toLocaleString(
-                  'es-ES'
-                )}
+                ${catalog.length.toLocaleString('es-ES')}
                 tablas
               </strong>
 
@@ -1903,18 +1218,13 @@ function renderCatalog() {
   `;
 
 
-  const search =
-    document.querySelector(
-      '#q'
-    );
+  const input =
+    document.querySelector('#q');
 
 
-  search.addEventListener(
+  input.addEventListener(
     'input',
-    () =>
-      paintCards(
-        search.value
-      )
+    () => paintCards(input.value)
   );
 
 
@@ -1922,270 +1232,161 @@ function renderCatalog() {
 }
 
 
-/* ============================================================
-   TARJETAS DEL CATÁLOGO
-   ============================================================ */
+/* =========================================================
+   PINTAR TARJETAS DEL CATÁLOGO
+========================================================= */
 
 function paintCards(term) {
 
-  const normalized =
+  const search =
     term
       .trim()
       .toLocaleLowerCase('es');
 
 
-  /*
-     MUY IMPORTANTE:
-
-     Hacemos una copia antes de ordenar.
-
-     Así no modificamos accidentalmente
-     el catálogo original.
-  */
-
   const rows =
     catalog
-      .filter(item => {
 
-        if (!normalized) {
-          return true;
-        }
+      .filter(table => {
 
-        const searchable =
-          [
-            item.title,
-            item.text,
-            item.id,
-            item.search_text,
-            item.operacion_titulo,
-            item.frecuencia
-          ]
-            .filter(Boolean)
-            .join(' ')
-            .toLocaleLowerCase('es');
+        if (!search) return true;
 
-        return searchable.includes(
-          normalized
-        );
+        const text =
+          table.search_text ||
+          table.title ||
+          '';
+
+        return text
+          .toLocaleLowerCase('es')
+          .includes(search);
       })
-      .slice()
-      .sort(
-        (a, b) =>
-          parseDate(b.updated) -
-          parseDate(a.updated)
+
+      /*
+       * MUY IMPORTANTE:
+       *
+       * updated viene como:
+       *
+       * 2026-06-02T09:23:43
+       *
+       * Por tanto lo convertimos a fecha real.
+       */
+      .sort((a, b) =>
+        parseDate(b.updated) -
+        parseDate(a.updated)
       );
 
 
-  const count =
-    document.querySelector(
-      '#count'
-    );
-
-  if (count) {
-
-    count.textContent =
-      `${rows.length.toLocaleString(
-        'es-ES'
-      )} tablas`;
-  }
+  document.querySelector('#count').textContent =
+    `${rows.length.toLocaleString('es-ES')} tablas`;
 
 
-  const cards =
-    document.querySelector(
-      '#cards'
-    );
+  document.querySelector('#cards').innerHTML =
 
-  if (!cards) return;
-
-
-  cards.innerHTML =
     rows
       .slice(0, 100)
-      .map(item => {
+      .map(table => `
 
-        const title =
-          item.title ||
-          item.text ||
-          item.id;
+        <article class="table-card">
 
-
-        const variables =
-          Array.isArray(
-            item.variables
-          )
-            ? item.variables
-            : [];
+          <h2>
+            ${esc(table.title || table.text)}
+          </h2>
 
 
-        return `
+          <p>
 
-          <article
-            class="table-card"
-          >
+            <strong>
+              ${esc(table.id)}
+            </strong>
 
-            <h2>
-              ${esc(title)}
-            </h2>
+            ·
+
+            ${esc(table.first_period || '')}
+
+            ${table.last_period
+              ? `— ${esc(table.last_period)}`
+              : ''
+            }
+
+            · Actualizada
+            ${esc(fmtDate(table.updated))}
+
+          </p>
 
 
-            <div class="table-id">
-              ${esc(item.id)}
-            </div>
-
+          <div class="tags">
 
             ${
-              item.updated
+              table.operacion_titulo
                 ? `
-                  <div class="table-updated">
-                    Actualizada:
-                    ${esc(
-                      formatDate(
-                        item.updated
-                      )
-                    )}
-                  </div>
+                  <span class="tag">
+                    ${esc(table.operacion_titulo)}
+                  </span>
                 `
                 : ''
             }
 
 
             ${
-              item.first_period ||
-              item.last_period
+              table.frecuencia
                 ? `
-                  <div class="table-period">
-                    ${esc(
-                      item.first_period || ''
-                    )}
-                    ${
-                      item.last_period
-                        ? ` — ${esc(
-                            item.last_period
-                          )}`
-                        : ''
-                    }
-                  </div>
+                  <span class="tag">
+                    ${esc(table.frecuencia)}
+                  </span>
                 `
                 : ''
             }
 
 
-            <div class="tags">
-
-              ${
-                item.operacion_titulo
-                  ? `
-                    <span class="tag">
-                      ${esc(
-                        item.operacion_titulo
-                      )}
-                    </span>
-                  `
-                  : ''
-              }
-
-
-              ${
-                item.frecuencia
-                  ? `
-                    <span class="tag">
-                      ${esc(
-                        item.frecuencia
-                      )}
-                    </span>
-                  `
-                  : ''
-              }
-
-
-              ${variables
+            ${
+              (table.variables || [])
                 .slice(0, 5)
-                .map(
-                  variable =>
-                    `<span class="tag">
-                      ${esc(
-                        variable.text ||
-                        variable
-                      )}
-                    </span>`
-                )
-                .join('')}
+                .map(variable => `
+                  <span class="tag">
+                    ${esc(variable.text || variable)}
+                  </span>
+                `)
+                .join('')
+            }
 
-            </div>
+          </div>
 
 
-            <a
-              class="open"
-              href="#/table/${encodeURIComponent(
-                item.id
-              )}"
-            >
-              Abrir tabla →
-            </a>
+          <a
+            class="open"
+            href="#/table/${encodeURIComponent(table.id)}"
+          >
+            Abrir tabla →
+          </a>
 
-          </article>
+        </article>
 
-        `;
-      })
-      .join('');
+      `)
+      .join('')
 
+    ||
 
-  if (!cards.innerHTML) {
-
-    cards.innerHTML = `
+    `
       <div class="empty">
         No se encontraron tablas.
       </div>
     `;
-  }
 }
 
 
-/* ============================================================
-   ROUTING
-   ============================================================ */
+/* =========================================================
+   ARRANQUE
+========================================================= */
 
-function route() {
+loadCatalog()
 
-  const hash =
-    location.hash || '#/';
-
-
-  const match =
-    hash.match(
-      /^#\/table\/(.+)$/
-    );
-
-
-  if (match) {
-
-    openTable(
-      decodeURIComponent(
-        match[1]
-      )
-    );
-
-    return;
-  }
-
-
-  renderCatalog();
-}
-
-
-/* ============================================================
-   INICIO
-   ============================================================ */
-
-async function start() {
-
-  try {
-
-    await loadCatalog();
+  .then(() => {
 
     route();
 
-  } catch (error) {
+  })
+
+  .catch(error => {
 
     app.innerHTML = `
 
@@ -2193,26 +1394,20 @@ async function start() {
 
         <div class="catalog-inner">
 
-          <div class="error-box">
+          <div class="error">
 
-            <div class="error-title">
-              No se pudo cargar Eustatbank
-            </div>
+            No se pudo cargar el catálogo:
 
-            <p>
-              ${esc(
-                error.message
-              )}
-            </p>
+            ${esc(error.message)}
 
           </div>
 
         </div>
 
       </main>
+
     `;
-  }
-}
+  });
 
 
 window.addEventListener(
@@ -2221,4 +1416,10 @@ window.addEventListener(
 );
 
 
-start();
+/* Exponer funciones utilizadas por onclick */
+window.runQuery = runQuery;
+window.toggleValue = toggleValue;
+window.selectAll = selectAll;
+window.clearAll = clearAll;
+window.download = download;
+window.copyQuery = copyQuery;
