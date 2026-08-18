@@ -1,1 +1,54 @@
 :root{--ink:#092633;--muted:#5e7078;--line:#c8dadd;--soft:#edf7f8;--blue:#bfe5fb;--accent:#126c7d;--white:#fff;--radius:16px;font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}*{box-sizing:border-box}body{margin:0;color:var(--ink);background:#fff}a{color:inherit}.topbar{height:72px;border-bottom:1px solid var(--line);display:flex;align-items:center;justify-content:space-between;padding:0 24px;background:#fff}.brand{display:flex;gap:11px;align-items:center;text-decoration:none}.brand-mark{width:40px;height:40px;border-radius:50%;background:#183c44;color:#fff;display:grid;place-items:center;font-size:22px}.brand strong{display:block;font-size:18px}.brand small{display:block;color:var(--muted);font-size:12px}.topbar nav{display:flex;gap:24px;align-items:center}.topbar nav a{text-decoration:underline;text-underline-offset:3px}.topbar button{border:0;background:transparent;color:var(--ink);cursor:pointer}.shell{display:grid;grid-template-columns:78px 360px 1fr;min-height:calc(100vh - 72px)}.rail{border-right:1px solid var(--line);padding-top:22px;background:#fff}.rail button{width:100%;border:0;background:transparent;padding:13px 4px;cursor:pointer;font-weight:600;color:var(--ink)}.rail button.active{background:#d8eef1;border-radius:0 28px 28px 0}.rail .icon{display:block;font-size:21px;margin-bottom:5px}.filter-pane{background:#eef8f9;padding:26px 30px;overflow:auto}.filter-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:20px}.filter-head h2{margin:0;font-size:25px}.filter-head button{border:0;background:transparent;cursor:pointer}.card{background:#fff;border-radius:18px;padding:20px;margin-bottom:16px}.card h3{margin:0 0 12px;font-size:18px}.pill{display:inline-block;background:#dcebed;border-radius:5px;padding:5px 8px;font-size:12px;font-weight:700}.selection{border:1px solid #9bc9d0;border-radius:8px;padding:13px;margin-top:14px;background:#fff}.selection label{display:flex;gap:9px;align-items:center;font-weight:600}.selection input{accent-color:#1d6c78}.value-list{max-height:230px;overflow:auto;margin-top:12px;border-top:1px solid var(--line);padding-top:10px}.value-row{display:flex;gap:8px;padding:7px 0;font-size:14px}.main{padding:0 42px 50px;overflow:auto}.notice{margin:0 -42px 0;padding:16px 42px;background:var(--blue);border-bottom:1px solid #9fd0e8}.breadcrumbs{padding:38px 0 28px;color:#315c69;font-size:14px}.breadcrumbs a{text-decoration:underline}.hero h1{font-size:34px;line-height:1.15;margin:0 0 14px;max-width:1000px}.hero .meta{display:flex;gap:16px;align-items:center;color:var(--muted);margin-bottom:26px}.outline{border:1px solid var(--ink);border-radius:24px;padding:8px 14px;background:#fff}.table-wrap{border:1px solid var(--ink);border-radius:10px;overflow:auto}.result-table{border-collapse:collapse;width:100%;min-width:700px}.result-table th,.result-table td{border:1px solid #6f858b;padding:9px 12px;text-align:right;white-space:nowrap}.result-table th{background:#dcebed;font-weight:700}.result-table th:first-child,.result-table td:first-child{text-align:left}.toolbar{display:flex;gap:10px;flex-wrap:wrap;margin:18px 0}.toolbar button,.toolbar a{border:1px solid #6b858c;border-radius:22px;padding:9px 13px;background:#fff;text-decoration:none;cursor:pointer}.catalog{background:#eef8f9;min-height:calc(100vh - 72px);padding:48px}.catalog-inner{max-width:1250px;margin:auto}.catalog h1{font-size:38px;margin:0 0 10px}.catalog p{max-width:780px;color:#455c64}.search{display:flex;margin:34px 0 30px}.search input{width:100%;padding:16px 18px;border:2px solid #213b43;border-radius:8px;font-size:16px}.catalog-grid{display:grid;grid-template-columns:280px 1fr;gap:28px}.filters{background:transparent}.filter-block{padding:15px 0;border-bottom:1px solid var(--line);font-weight:700}.results-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:12px}.table-card{background:#fff;border:1px solid #c7dadd;border-radius:16px;padding:18px;margin-bottom:12px;box-shadow:0 1px 1px #00000008}.table-card h2{font-size:18px;margin:0 0 9px}.table-card p{font-size:14px;margin:5px 0;color:var(--muted)}.tags{display:flex;gap:7px;flex-wrap:wrap;margin:12px 0}.tag{font-size:12px;border:1px solid #c7dadd;border-radius:16px;padding:4px 8px;background:#f7fbfb}.open{display:inline-block;margin-top:5px;font-weight:700;color:#0b5f70;text-decoration:underline}.status{padding:12px 0;color:var(--muted)}.empty{padding:40px;background:#fff;border-radius:16px;color:var(--muted)}.loading{padding:30px;background:#fff;border-radius:16px}.error{padding:16px;background:#fff1f1;border:1px solid #dca8a8;border-radius:10px;color:#7a2020}.select-actions{display:flex;gap:6px;margin:8px 0}.select-actions button{border:0;background:#eef7f8;border-radius:5px;padding:5px 8px;cursor:pointer;font-size:12px}@media(max-width:1000px){.shell{grid-template-columns:60px 300px 1fr}.main{padding-left:24px;padding-right:24px}.notice{margin-left:-24px;margin-right:-24px;padding-left:24px;padding-right:24px}.catalog{padding:28px}.catalog-grid{grid-template-columns:1fr}.rail{display:none}}@media(max-width:720px){.topbar{padding:0 12px}.topbar nav a{display:none}.shell{display:block}.filter-pane{padding:18px}.main{padding:0 16px 40px}.notice{margin:0 -16px;padding:14px 16px}.breadcrumbs{padding:22px 0}.hero h1{font-size:28px}}
+
+.api-test-area {
+  margin: 14px 0 22px;
+}
+
+.api-test-button {
+  border: 1px solid #173e46;
+  background: #fff;
+  color: #173e46;
+  border-radius: 7px;
+  padding: 10px 14px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.api-test-button:hover {
+  background: #eef7f8;
+}
+
+.api-ok,
+.api-error {
+  margin-top: 10px;
+  padding: 14px 16px;
+  border-radius: 8px;
+  border: 1px solid #c7dadd;
+  background: #fff;
+}
+
+.api-ok {
+  border-left: 5px solid #138a63;
+}
+
+.api-error {
+  border-left: 5px solid #b33a3a;
+}
+
+.api-test-area ul {
+  margin: 8px 0 0 20px;
+}
+
+.loading {
+  padding: 30px;
+  background: #fff;
+  border-radius: 16px;
+}
+
+.error {
+  padding: 16px;
+  background: #fff1f1;
+  border: 1px solid #dca8a8;
+  border-radius: 10px;
+  color: #7a2020;
+}
