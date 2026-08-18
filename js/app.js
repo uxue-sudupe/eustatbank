@@ -1,1425 +1,1785 @@
 
-const API = 'https://www.eustat.eus/bankupx/api/v1/es/DB';
-const DATA = './data/index_es.json';
+/* =========================================================
+   EUSTATBANK
+   Aplicación principal
 
-const app = document.querySelector('#app');
+   - Catálogo Eustat
+   - Metadatos PX
+   - Consultas JSON-stat 1.2
+   - Parser dinámico
+   - Selección del último período
+   - Catálogo ordenado por updated DESC
+   ========================================================= */
+
+const API_BASE =
+  "https://www.eustat.eus/bankupx/api/v1/es/DB";
+
+const app = document.getElementById("app");
 
 let catalog = [];
-
-let state = {
-  meta: null,
-  selections: {},
-  result: null,
-  table: null
-};
+let currentTable = null;
+let currentMetadata = null;
+let currentResult = null;
 
 
 /* =========================================================
    UTILIDADES
-========================================================= */
+   ========================================================= */
 
-const esc = (s) =>
-  String(s ?? '').replace(/[&<>\"]/g, m => ({
-    '&': '&amp;',
-    '<': '&lt;',
-    '>': '&gt;',
-    '"': '&quot;'
-  }[m]));
-
-function parseDate(value) {
-  if (!value) return 0;
-
-  const d = new Date(value);
-
-  if (!Number.isNaN(d.getTime())) {
-    return d.getTime();
-  }
-
-  return 0;
-}
-
-function fmtDate(value) {
-  if (!value) return '';
-
-  const d = new Date(value);
-
-  if (Number.isNaN(d.getTime())) {
-    return String(value);
-  }
-
-  return d.toLocaleString('es-ES', {
-    dateStyle: 'short',
-    timeStyle: 'short'
-  });
+function escapeHtml(value) {
+  return String(value ?? "")
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#039;");
 }
 
 
-/* =========================================================
-   CARGA DEL CATÁLOGO
-========================================================= */
+function formatDate(value) {
+  if (!value) return "—";
 
-async function loadCatalog() {
-  const response = await fetch(DATA);
+  const date = new Date(value);
 
-  if (!response.ok) {
-    throw new Error(`No se pudo cargar el catálogo (${response.status})`);
+  if (Number.isNaN(date.getTime())) {
+    return value;
   }
 
-  const json = await response.json();
-
-  catalog = Array.isArray(json.data) ? json.data : [];
-
-  /*
-   * Ordenamos aquí también, para que el catálogo ya esté
-   * preparado correctamente desde el principio.
-   */
-  catalog.sort((a, b) => {
-    return parseDate(b.updated) - parseDate(a.updated);
-  });
+  return new Intl.DateTimeFormat("es-ES", {
+    day: "numeric",
+    month: "numeric",
+    year: "numeric"
+  }).format(date);
 }
 
 
-/* =========================================================
-   API EUSTAT
-========================================================= */
-
-async function apiMeta(id) {
-  const response = await fetch(
-    `${API}/${encodeURIComponent(id)}`,
-    {
-      headers: {
-        'Accept': 'application/json'
-      }
-    }
-  );
-
-  const text = await response.text();
-
-  if (!response.ok) {
-    throw new Error(
-      `No se pudieron obtener los metadatos (${response.status}). ${text.slice(0, 500)}`
-    );
+function formatValue(value) {
+  if (value === null || value === undefined) {
+    return "—";
   }
 
-  try {
-    return JSON.parse(text);
-  } catch {
-    throw new Error(
-      'Eustat no devolvió unos metadatos JSON válidos.'
-    );
+  if (typeof value === "number") {
+    return new Intl.NumberFormat("es-ES", {
+      maximumFractionDigits: 10
+    }).format(value);
   }
+
+  return String(value);
 }
 
-
-async function apiData(id, query) {
-  const body = {
-    ...query,
-    response: {
-      format: 'json-stat'
-    }
-  };
-
-  const response = await fetch(
-    `${API}/${encodeURIComponent(id)}`,
-    {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Accept': 'application/json'
-      },
-      body: JSON.stringify(body)
-    }
-  );
-
-  const text = await response.text();
-
-  if (!response.ok) {
-    throw new Error(
-      `La consulta ha fallado (HTTP ${response.status}). ${text.slice(0, 800)}`
-    );
-  }
-
-  try {
-    return JSON.parse(text);
-  } catch {
-    throw new Error(
-      `Eustat respondió algo que no es JSON válido: ${text.slice(0, 800)}`
-    );
-  }
-}
-
-
-/* =========================================================
-   JSON-STAT 1.2
-========================================================= */
-
-/*
- * Eustat devuelve:
-
- {
-   "dataset": {
-      "dimension": {...},
-      "id": [...],
-      "size": [...],
-      "value": [...]
-   }
- }
-
- Por tanto primero tenemos que entrar en dataset.
- */
-
-function unwrapJsonStat(raw) {
-  if (raw && raw.dataset) {
-    return raw.dataset;
-  }
-
-  return raw;
-}
-
-
-/*
- * Obtiene las categorías de una dimensión respetando
- * category.index de JSON-stat.
- */
-function getDimensionCategories(dimension) {
-  if (!dimension || !dimension.category) {
-    return [];
-  }
-
-  const category = dimension.category;
-
-  const index = category.index || {};
-  const labels = category.label || {};
-
-  let keys = [];
-
-  if (Array.isArray(index)) {
-    keys = [...index];
-  } else if (
-    index &&
-    typeof index === 'object' &&
-    Object.keys(index).length
-  ) {
-    keys = Object.keys(index).sort(
-      (a, b) => Number(index[a]) - Number(index[b])
-    );
-  } else {
-    keys = Object.keys(labels);
-  }
-
-  return keys.map(key => ({
-    code: key,
-    label: labels[key] ?? key
-  }));
-}
-
-
-/*
- * Convierte JSON-stat 1.2 en una estructura sencilla
- * que podemos utilizar para pintar la tabla.
- */
-function normalizeJsonStat(raw) {
-  const j = unwrapJsonStat(raw);
-
-  if (!j || typeof j !== 'object') {
-    return null;
-  }
-
-  if (!j.dimension) {
-    return null;
-  }
-
-  const ids = Array.isArray(j.id)
-    ? j.id
-    : Object.keys(j.dimension);
-
-  const dimensions = ids.map(id => {
-    const dimension = j.dimension[id];
-
-    const categories = getDimensionCategories(dimension);
-
-    return {
-      id,
-      label: dimension?.label || id,
-      categories
-    };
-  });
-
-  const sizes = Array.isArray(j.size)
-    ? j.size
-    : dimensions.map(d => d.categories.length);
-
-  return {
-    raw: j,
-    ids,
-    sizes,
-    dimensions,
-    values: j.value
-  };
-}
-
-
-/* =========================================================
-   VARIABLES / PERIODOS
-========================================================= */
 
 function isTimeVariable(variable) {
-  if (!variable) return false;
-
-  if (variable.time === true) {
-    return true;
-  }
-
-  const code = String(variable.code || '').toLowerCase();
-  const text = String(variable.text || '').toLowerCase();
-
-  return (
-    code === 'periodo' ||
-    code === 'period' ||
-    code.includes('period') ||
-    text === 'periodo' ||
-    text === 'período'
+  return Boolean(
+    variable.time === true ||
+    variable.code?.toLowerCase() === "periodo" ||
+    variable.code?.toLowerCase() === "period"
   );
 }
 
 
-/*
- * Devuelve los valores de una variable.
- *
- * Para periodo:
- *     2025
- *     2024
- *     2023
- *     ...
- *
- * Para el resto mantiene el orden de Eustat.
- */
-function getVariableValues(variable) {
-  const values = variable.values || [];
-  const texts = variable.valueTexts || [];
+/* =========================================================
+   FETCH JSON
+   ========================================================= */
 
-  const items = values.map((code, index) => ({
-    code,
-    text: texts[index] ?? code,
-    originalIndex: index
-  }));
+async function fetchJson(url, options = {}) {
 
-  if (isTimeVariable(variable)) {
-    items.sort((a, b) => {
-      return String(b.code).localeCompare(
-        String(a.code),
-        'es',
-        {
-          numeric: true,
-          sensitivity: 'base'
-        }
-      );
-    });
-  }
-
-  return items;
-}
-
-
-/*
- * Inicialización:
- *
- * - Variables normales: primer valor.
- * - Periodo: último periodo disponible.
- *
- * Como getVariableValues() ordena periodo de mayor a menor,
- * el primer elemento es el más reciente.
- */
-function initSelections() {
-  state.selections = {};
-
-  for (const variable of state.meta.variables || []) {
-    const values = getVariableValues(variable);
-
-    if (!values.length) {
-      state.selections[variable.code] = [];
-      continue;
+  const response = await fetch(url, {
+    ...options,
+    headers: {
+      Accept: "application/json",
+      ...(options.headers || {})
     }
+  });
 
-    state.selections[variable.code] = [
-      values[0].code
-    ];
+  const text = await response.text();
+
+  let data = null;
+
+  try {
+    data = text ? JSON.parse(text) : null;
+  } catch {
+    throw new Error(
+      `La respuesta de Eustat no es JSON válido.\n\nHTTP ${response.status}\n\n${text.slice(0, 2000)}`
+    );
   }
+
+  if (!response.ok) {
+
+    const detail =
+      typeof data === "string"
+        ? data
+        : JSON.stringify(data, null, 2);
+
+    throw new Error(
+      `Eustat respondió HTTP ${response.status}.\n\n${detail}`
+    );
+  }
+
+  return data;
 }
 
 
 /* =========================================================
-   ROUTER
-========================================================= */
+   CATÁLOGO
+   ========================================================= */
 
-function route() {
-  const hash = location.hash || '#/';
+async function loadCatalog() {
 
-  const match = hash.match(/^#\/table\/(.+)$/);
+  app.innerHTML = `
+    <div class="page">
+      <div class="loading">
+        Cargando catálogo de Eustat…
+      </div>
+    </div>
+  `;
 
-  if (match) {
-    openTable(decodeURIComponent(match[1]));
+  catalog = await fetchJson(API_BASE);
+
+  if (!Array.isArray(catalog)) {
+    throw new Error(
+      "El catálogo recibido de Eustat no tiene el formato esperado."
+    );
+  }
+
+  /*
+   * Eustat devuelve:
+   *
+   * {
+   *   id,
+   *   type,
+   *   text,
+   *   updated
+   * }
+   *
+   * Ordenamos por updated DESC.
+   */
+
+  catalog = catalog
+    .filter(item => item.type === "t" || !item.type)
+    .sort((a, b) => {
+      const dateA = new Date(a.updated || 0).getTime();
+      const dateB = new Date(b.updated || 0).getTime();
+
+      return dateB - dateA;
+    });
+
+  renderHome();
+}
+
+
+/* =========================================================
+   HOME
+   ========================================================= */
+
+function renderHome() {
+
+  app.innerHTML = `
+    <div class="page">
+
+      <section class="hero">
+
+        <h1>Eustatbank</h1>
+
+        <p>
+          Explora las tablas estadísticas de Eustat
+          directamente desde su API pública.
+        </p>
+
+        <div class="search-box">
+          <input
+            id="catalog-search"
+            type="search"
+            placeholder="Buscar por título, operación, variable o palabra clave…"
+            autocomplete="off"
+          >
+        </div>
+
+      </section>
+
+
+      <section class="catalog-layout">
+
+        <aside class="catalog-sidebar">
+
+          <div class="sidebar-item">
+            <h2>Contenido</h2>
+          </div>
+
+          <div class="sidebar-item">
+            <strong>Operación estadística</strong>
+          </div>
+
+          <div class="sidebar-item">
+            <strong>Frecuencia</strong>
+          </div>
+
+          <div class="sidebar-item">
+            <strong>Periodo</strong>
+          </div>
+
+        </aside>
+
+
+        <section class="catalog-main">
+
+          <div
+            id="catalog-count"
+            class="catalog-count"
+          ></div>
+
+          <div id="catalog-list"></div>
+
+        </section>
+
+      </section>
+
+    </div>
+  `;
+
+
+  const searchInput =
+    document.getElementById("catalog-search");
+
+  searchInput.addEventListener("input", () => {
+    renderCatalog(searchInput.value);
+  });
+
+  renderCatalog("");
+}
+
+
+function renderCatalog(search = "") {
+
+  const normalizedSearch =
+    search.trim().toLocaleLowerCase("es");
+
+  const filtered = catalog.filter(item => {
+
+    if (!normalizedSearch) {
+      return true;
+    }
+
+    const haystack = [
+      item.id,
+      item.text,
+      item.updated
+    ]
+      .filter(Boolean)
+      .join(" ")
+      .toLocaleLowerCase("es");
+
+    return haystack.includes(normalizedSearch);
+  });
+
+
+  document.getElementById("catalog-count").textContent =
+    `${filtered.length} ${filtered.length === 1 ? "tabla" : "tablas"}`;
+
+
+  const list =
+    document.getElementById("catalog-list");
+
+
+  if (filtered.length === 0) {
+
+    list.innerHTML = `
+      <div class="message">
+        <strong>No se encontraron tablas.</strong>
+        Prueba con otra búsqueda.
+      </div>
+    `;
+
     return;
   }
 
-  renderCatalog();
+
+  list.innerHTML = filtered
+    .map(item => {
+
+      const id = escapeHtml(item.id);
+      const title = escapeHtml(item.text);
+      const updated = formatDate(item.updated);
+
+      return `
+        <article class="table-card">
+
+          <h2>${title}</h2>
+
+          <div class="table-id">
+            ${id}
+          </div>
+
+          <div class="table-updated">
+            Actualizada: ${escapeHtml(updated)}
+          </div>
+
+          <a href="#/table/${encodeURIComponent(item.id)}">
+            Abrir tabla →
+          </a>
+
+        </article>
+      `;
+    })
+    .join("");
 }
 
 
 /* =========================================================
    TABLA
-========================================================= */
+   ========================================================= */
 
-async function openTable(id) {
-  const table = catalog.find(x => x.id === id);
+async function openTable(tableId) {
 
-  if (!table) {
-    location.hash = '#/';
-    return;
-  }
+  const item = catalog.find(
+    table => table.id === tableId
+  );
 
-  state = {
-    meta: null,
-    selections: {},
-    result: null,
-    table
+  currentTable = item || {
+    id: tableId,
+    text: tableId
   };
 
-  renderTableShell();
-
-  try {
-    state.meta = await apiMeta(id);
-
-    initSelections();
-
-    renderTable();
-
-  } catch (error) {
-
-    app.innerHTML = `
-      <main class="catalog">
-        <div class="catalog-inner">
-          <div class="error">
-            ${esc(error.message)}
-          </div>
-        </div>
-      </main>
-    `;
-  }
-}
-
-
-/* =========================================================
-   ESTRUCTURA DE LA PÁGINA DE TABLA
-========================================================= */
-
-function renderTableShell() {
 
   app.innerHTML = `
-    <div class="shell">
+    <div class="page">
 
-      <aside class="rail">
-
-        <button class="active">
-          <span class="icon">☷</span>
-          Filter
-        </button>
-
-        <button>
-          <span class="icon">▥</span>
-          Display
-        </button>
-
-        <button>
-          <span class="icon">↕</span>
-          Edit
-        </button>
-
-        <button>
-          <span class="icon">⇩</span>
-          Save
-        </button>
-
-        <button>
-          <span class="icon">?</span>
-          Help
-        </button>
-
-      </aside>
-
-
-      <aside class="filter-pane" id="filters">
-
-        <div class="filter-head">
-          <h2>Seleccionar datos</h2>
-        </div>
-
-      </aside>
-
-
-      <main class="main" id="tablemain"></main>
-
-    </div>
-  `;
-}
-
-
-/* =========================================================
-   RENDER TABLA
-========================================================= */
-
-function renderTable() {
-
-  const meta = state.meta;
-
-  document.querySelector('#filters').innerHTML = `
-    <div class="filter-head">
-      <h2>Seleccionar datos</h2>
-      <button onclick="location.hash='#/'">
-        Volver
-      </button>
-    </div>
-
-    ${(meta.variables || [])
-      .map(variable => filterCard(variable))
-      .join('')
-    }
-  `;
-
-
-  document.querySelector('#tablemain').innerHTML = `
-
-    <div class="notice">
-      ⓘ Consulta datos directamente desde la API pública de Eustat.
-    </div>
-
-    <div class="breadcrumbs">
-      <a href="#/">Tablas</a>
-     　›　
-      ${esc(meta.title || state.table.title)}
-    </div>
-
-    <section class="hero">
-
-      <h1>
-        ${esc(state.table.title || meta.title)}
-      </h1>
-
-      <div class="meta">
-
-        <span>
-          Actualizada:
-          ${esc(fmtDate(state.table.updated))}
-        </span>
-
+      <div class="loading">
+        Cargando metadatos de la tabla…
       </div>
 
-    </section>
-
-
-    <div class="toolbar">
-
-      <button onclick="runQuery()">
-        Mostrar tabla
-      </button>
-
-      <button onclick="download('csv')">
-        Descargar CSV
-      </button>
-
-      <button onclick="download('xlsx')">
-        Excel
-      </button>
-
-      <button onclick="copyQuery()">
-        Copiar consulta API
-      </button>
-
-    </div>
-
-
-    <div id="result">
-
-      <div class="empty">
-        Selecciona los datos y pulsa
-        <strong>Mostrar tabla</strong>.
-      </div>
-
-    </div>
-  `;
-}
-
-
-/* =========================================================
-   TARJETA DE FILTRO
-========================================================= */
-
-function filterCard(variable) {
-
-  const values = getVariableValues(variable);
-
-  const selected =
-    state.selections[variable.code] || [];
-
-
-  return `
-    <section class="card">
-
-      <h3>
-        ${esc(variable.text || variable.code)}
-      </h3>
-
-      <span class="pill">
-        ${selected.length} de ${values.length} seleccionados
-      </span>
-
-
-      <div class="selection">
-
-        <div class="select-actions">
-
-          <button onclick='selectAll(${JSON.stringify(variable.code)})'>
-            Todos
-          </button>
-
-          <button onclick='clearAll(${JSON.stringify(variable.code)})'>
-            Ninguno
-          </button>
-
-        </div>
-
-
-        <div class="value-list">
-
-          ${values.map(item => `
-
-            <label class="value-row">
-
-              <input
-                type="checkbox"
-                ${selected.includes(item.code) ? 'checked' : ''}
-                onchange='toggleValue(
-                  ${JSON.stringify(variable.code)},
-                  ${JSON.stringify(item.code)},
-                  this.checked
-                )'
-              >
-
-              <span>
-                ${esc(item.text)}
-              </span>
-
-            </label>
-
-          `).join('')}
-
-        </div>
-
-      </div>
-
-    </section>
-  `;
-}
-
-
-/* =========================================================
-   SELECCIONES
-========================================================= */
-
-function toggleValue(code, value, checked) {
-
-  state.selections[code] =
-    state.selections[code] || [];
-
-
-  if (
-    checked &&
-    !state.selections[code].includes(value)
-  ) {
-    state.selections[code].push(value);
-  }
-
-
-  if (!checked) {
-
-    state.selections[code] =
-      state.selections[code]
-        .filter(x => x !== value);
-
-  }
-
-
-  renderFiltersOnly();
-}
-
-
-function renderFiltersOnly() {
-
-  document.querySelector('#filters').innerHTML = `
-
-    <div class="filter-head">
-      <h2>Seleccionar datos</h2>
-
-      <button onclick="location.hash='#/'">
-        Volver
-      </button>
-    </div>
-
-    ${(state.meta.variables || [])
-      .map(variable => filterCard(variable))
-      .join('')
-    }
-  `;
-}
-
-
-function selectAll(code) {
-
-  const variable =
-    state.meta.variables.find(
-      x => x.code === code
-    );
-
-  if (!variable) return;
-
-  const values =
-    getVariableValues(variable);
-
-  state.selections[code] =
-    values.map(x => x.code);
-
-  renderFiltersOnly();
-}
-
-
-function clearAll(code) {
-
-  state.selections[code] = [];
-
-  renderFiltersOnly();
-}
-
-
-/* =========================================================
-   QUERY
-========================================================= */
-
-function buildQuery() {
-
-  return {
-
-    query:
-      (state.meta.variables || [])
-        .filter(variable =>
-          state.selections[variable.code]?.length
-        )
-        .map(variable => ({
-
-          code: variable.code,
-
-          selection: {
-            filter: 'item',
-            values:
-              state.selections[variable.code]
-          }
-
-        }))
-
-  };
-}
-
-
-/* =========================================================
-   CONSULTAR DATOS
-========================================================= */
-
-async function runQuery() {
-
-  const result =
-    document.querySelector('#result');
-
-  result.innerHTML = `
-    <div class="loading">
-      Consultando Eustat…
     </div>
   `;
 
 
   try {
 
-    const query = buildQuery();
+    /*
+     * GET de metadatos.
+     *
+     * Eustat devuelve:
+     *
+     * {
+     *   title: "...",
+     *   variables: [...]
+     * }
+     */
 
-    state.result =
-      await apiData(
-        state.table.id,
-        query
+    currentMetadata =
+      await fetchJson(
+        `${API_BASE}/${encodeURIComponent(tableId)}`
       );
 
 
-    const normalized =
-      normalizeJsonStat(state.result);
-
-
-    if (!normalized) {
-
-      result.innerHTML = `
-        <div class="error">
-
-          <strong>
-            Eustat no devolvió un JSON-stat reconocible.
-          </strong>
-
-          <details>
-            <summary>Respuesta recibida</summary>
-
-            <pre>${esc(
-              JSON.stringify(
-                state.result,
-                null,
-                2
-              )
-            )}</pre>
-
-          </details>
-
-        </div>
-      `;
-
-      return;
+    if (
+      !currentMetadata ||
+      !Array.isArray(currentMetadata.variables)
+    ) {
+      throw new Error(
+        "Los metadatos de Eustat no contienen una lista de variables válida."
+      );
     }
 
 
-    result.innerHTML =
-      renderJsonStat(normalized);
-
+    renderTablePage();
 
   } catch (error) {
 
-    result.innerHTML = `
-      <div class="error">
-
-        <strong>
-          Error al consultar Eustat
-        </strong>
-
-        <p>
-          ${esc(error.message)}
-        </p>
-
-        <details>
-          <summary>
-            Consulta enviada
-          </summary>
-
-          <pre>${esc(
-            JSON.stringify(
-              buildQuery(),
-              null,
-              2
-            )
-          )}</pre>
-
-        </details>
-
-      </div>
-    `;
+    renderTableError(error);
   }
 }
 
 
 /* =========================================================
-   PINTAR JSON-STAT
-========================================================= */
+   PÁGINA DE TABLA
+   ========================================================= */
 
-function renderJsonStat(data) {
+function renderTablePage() {
 
-  const {
-    ids,
-    sizes,
-    dimensions,
-    values
-  } = data;
+  const title =
+    currentMetadata.title ||
+    currentTable.text ||
+    currentTable.id;
 
 
-  if (
-    !ids.length ||
-    !dimensions.length
-  ) {
+  const updated =
+    currentTable.updated;
 
-    return `
-      <div class="empty">
-        El JSON-stat no contiene dimensiones.
+
+  app.innerHTML = `
+    <div class="page">
+
+      <div class="breadcrumbs">
+        <a href="#/">Tablas</a>
+        <span>　›　</span>
+        ${escapeHtml(title)}
       </div>
-    `;
-  }
 
 
-  /*
-   * Generamos todas las coordenadas.
-   *
-   * Ejemplo:
-   *
-   * dimensión A: 2 valores
-   * dimensión B: 3 valores
-   *
-   * 2 × 3 = 6 celdas
-   */
-
-  const rows = [];
+      <h1 class="table-page-title">
+        ${escapeHtml(title)}
+      </h1>
 
 
-  function generateCoordinates(
-    dimension,
-    prefix = []
-  ) {
-
-    if (dimension === ids.length) {
-
-      rows.push(prefix);
-
-      return;
-    }
+      ${
+        updated
+          ? `
+            <div class="updated-line">
+              Actualizada: ${escapeHtml(formatDate(updated))}
+            </div>
+          `
+          : ""
+      }
 
 
-    for (
-      let i = 0;
-      i < sizes[dimension];
-      i++
-    ) {
-
-      generateCoordinates(
-        dimension + 1,
-        [...prefix, i]
-      );
-    }
-  }
+      <div class="api-note">
+        ⓘ Consulta datos directamente desde la API pública de Eustat.
+      </div>
 
 
-  generateCoordinates(0);
+      <section class="selection-panel">
+
+        <div class="selection-header">
+
+          <h2>Seleccionar datos</h2>
+
+          <button
+            id="back-button"
+            class="button"
+            type="button"
+          >
+            Volver
+          </button>
+
+        </div>
 
 
-  let html = `
+        <div
+          id="variables"
+          class="variable-grid"
+        ></div>
 
-    <div class="table-wrap">
+      </section>
 
-      <table class="result-table">
 
-        <thead>
+      <section>
 
-          <tr>
+        <div class="result-actions">
 
-            ${dimensions.map(d => `
-              <th>
-                ${esc(d.label)}
-              </th>
-            `).join('')}
+          <button
+            id="show-table"
+            class="button button-primary"
+            type="button"
+          >
+            Mostrar tabla
+          </button>
 
-            <th>
-              Valor
-            </th>
+          <button
+            id="download-csv"
+            class="button"
+            type="button"
+            disabled
+          >
+            Descargar CSV
+          </button>
 
-          </tr>
+          <button
+            id="download-excel"
+            class="button"
+            type="button"
+            disabled
+          >
+            Excel
+          </button>
 
-        </thead>
+          <button
+            id="copy-api"
+            class="button"
+            type="button"
+            disabled
+          >
+            Copiar consulta API
+          </button>
 
-        <tbody>
+        </div>
+
+
+        <div id="result"></div>
+
+      </section>
+
+    </div>
   `;
 
 
-  rows
-    .slice(0, 5000)
-    .forEach(coordinates => {
-
-      /*
-       * JSON-stat utiliza orden row-major.
-       *
-       * Calculamos aquí el índice plano.
-       */
-
-      let flatIndex = 0;
-
-      for (
-        let i = 0;
-        i < coordinates.length;
-        i++
-      ) {
-
-        flatIndex =
-          flatIndex * sizes[i] +
-          coordinates[i];
-      }
-
-
-      let value = '';
-
-
-      if (Array.isArray(values)) {
-
-        value =
-          values[flatIndex] ?? '';
-
-      } else if (
-        values &&
-        typeof values === 'object'
-      ) {
-
-        value =
-          values[String(flatIndex)] ?? '';
-
-      }
-
-
-      html += `
-
-        <tr>
-
-          ${coordinates.map((position, i) => {
-
-            const category =
-              dimensions[i].categories[position];
-
-            return `
-              <td>
-                ${esc(category?.label ?? '')}
-              </td>
-            `;
-
-          }).join('')}
-
-
-          <td>
-            ${esc(value)}
-          </td>
-
-        </tr>
-      `;
+  document
+    .getElementById("back-button")
+    .addEventListener("click", () => {
+      location.hash = "#/";
     });
 
 
-  html += `
-
-        </tbody>
-
-      </table>
-
-    </div>
-  `;
-
-
-  if (rows.length > 5000) {
-
-    html += `
-      <p class="status">
-        Mostrando 5.000 de
-        ${rows.length.toLocaleString('es-ES')}
-        celdas.
-      </p>
-    `;
-  }
-
-
-  return html;
+  renderVariables();
 }
 
 
 /* =========================================================
-   DESCARGAS
-========================================================= */
+   VARIABLES
+   ========================================================= */
 
-async function download(format) {
+function renderVariables() {
 
-  if (!state.table) return;
+  const container =
+    document.getElementById("variables");
+
+
+  container.innerHTML =
+    currentMetadata.variables
+      .map((variable, index) =>
+        renderVariable(variable, index)
+      )
+      .join("");
+
+
+  currentMetadata.variables.forEach(
+    (variable, index) => {
+
+      const variableElement =
+        document.querySelector(
+          `[data-variable-index="${index}"]`
+        );
+
+
+      const checkboxes =
+        variableElement.querySelectorAll(
+          'input[type="checkbox"]'
+        );
+
+
+      const count =
+        variableElement.querySelector(
+          ".variable-count"
+        );
+
+
+      const updateCount = () => {
+
+        const selected =
+          [...checkboxes]
+            .filter(input => input.checked)
+            .length;
+
+        count.textContent =
+          `${selected} de ${checkboxes.length} seleccionados`;
+
+      };
+
+
+      checkboxes.forEach(input => {
+        input.addEventListener(
+          "change",
+          updateCount
+        );
+      });
+
+
+      const allButton =
+        variableElement.querySelector(
+          "[data-action='all']"
+        );
+
+      const noneButton =
+        variableElement.querySelector(
+          "[data-action='none']"
+        );
+
+
+      allButton.addEventListener("click", () => {
+
+        checkboxes.forEach(
+          input => {
+            input.checked = true;
+          }
+        );
+
+        updateCount();
+      });
+
+
+      noneButton.addEventListener("click", () => {
+
+        checkboxes.forEach(
+          input => {
+            input.checked = false;
+          }
+        );
+
+        updateCount();
+      });
+
+
+      const search =
+        variableElement.querySelector(
+          ".variable-search"
+        );
+
+
+      search.addEventListener("input", () => {
+
+        const query =
+          search.value
+            .trim()
+            .toLocaleLowerCase("es");
+
+
+        variableElement
+          .querySelectorAll(".option")
+          .forEach(option => {
+
+            const text =
+              option.textContent
+                .toLocaleLowerCase("es");
+
+            option.hidden =
+              query && !text.includes(query);
+          });
+      });
+    }
+  );
+}
+
+
+/* =========================================================
+   VARIABLE INDIVIDUAL
+   ========================================================= */
+
+function renderVariable(variable, index) {
+
+  const values =
+    Array.isArray(variable.values)
+      ? variable.values
+      : [];
+
+
+  const labels =
+    Array.isArray(variable.valueTexts)
+      ? variable.valueTexts
+      : values;
+
+
+  /*
+   * IMPORTANTE:
+   *
+   * Si es una variable temporal,
+   * seleccionamos el ÚLTIMO valor.
+   *
+   * No asumimos que "_T" significa total.
+   * Los códigos son simplemente códigos.
+   */
+
+  const time =
+    isTimeVariable(variable);
+
+
+  const defaultIndex =
+    values.length > 0
+      ? time
+        ? values.length - 1
+        : 0
+      : -1;
+
+
+  return `
+    <section
+      class="variable-card"
+      data-variable-index="${index}"
+    >
+
+      <h3>
+        ${escapeHtml(variable.text || variable.code)}
+      </h3>
+
+
+      <div class="variable-count">
+        ${defaultIndex >= 0 ? "1" : "0"} de ${values.length} seleccionados
+      </div>
+
+
+      <div class="variable-actions">
+
+        <button
+          class="button"
+          type="button"
+          data-action="all"
+        >
+          Todos
+        </button>
+
+        <button
+          class="button"
+          type="button"
+          data-action="none"
+        >
+          Ninguno
+        </button>
+
+      </div>
+
+
+      ${
+        values.length > 12
+          ? `
+            <input
+              class="variable-search"
+              type="search"
+              placeholder="Buscar..."
+              autocomplete="off"
+            >
+          `
+          : ""
+      }
+
+
+      <div class="options-list">
+
+        ${values
+          .map((value, valueIndex) => {
+
+            const checked =
+              valueIndex === defaultIndex
+                ? "checked"
+                : "";
+
+
+            const label =
+              labels[valueIndex] ??
+              value;
+
+
+            return `
+              <label class="option">
+
+                <input
+                  type="checkbox"
+                  value="${escapeHtml(value)}"
+                  data-variable-code="${escapeHtml(variable.code)}"
+                  ${checked}
+                >
+
+                <span class="option-label">
+                  ${escapeHtml(label)}
+                </span>
+
+              </label>
+            `;
+          })
+          .join("")}
+
+      </div>
+
+    </section>
+  `;
+}
+
+
+/* =========================================================
+   CONSTRUIR QUERY
+   ========================================================= */
+
+function buildQuery() {
+
+  const query = [];
+
+
+  currentMetadata.variables.forEach(
+    (variable, variableIndex) => {
+
+      const variableElement =
+        document.querySelector(
+          `[data-variable-index="${variableIndex}"]`
+        );
+
+
+      if (!variableElement) {
+        return;
+      }
+
+
+      const selected =
+        [...variableElement.querySelectorAll(
+          'input[type="checkbox"]:checked'
+        )]
+          .map(input => input.value);
+
+
+      /*
+       * Si no se selecciona nada de una variable,
+       * no la incluimos.
+       *
+       * Esto permite que Eustat aplique su comportamiento
+       * por defecto.
+       */
+
+      if (selected.length === 0) {
+        return;
+      }
+
+
+      query.push({
+        code: variable.code,
+        selection: {
+          filter: "item",
+          values: selected
+        }
+      });
+    }
+  );
+
+
+  return {
+    query,
+    response: {
+      format: "json-stat"
+    }
+  };
+}
+
+
+/* =========================================================
+   CONSULTA API
+   ========================================================= */
+
+async function requestData() {
+
+  const query =
+    buildQuery();
+
+
+  const result =
+    document.getElementById("result");
+
+
+  const showButton =
+    document.getElementById("show-table");
+
+
+  showButton.disabled = true;
+
+
+  result.innerHTML = `
+    <div class="loading">
+      Consultando datos a Eustat…
+    </div>
+  `;
 
 
   try {
 
     const response =
       await fetch(
-        `${API}/${encodeURIComponent(state.table.id)}`,
+        `${API_BASE}/${encodeURIComponent(currentTable.id)}`,
         {
-          method: 'POST',
+          method: "POST",
 
           headers: {
-            'Content-Type':
-              'application/json',
-
-            'Accept':
-              'application/octet-stream'
+            "Content-Type": "application/json",
+            "Accept": "application/json"
           },
 
-          body: JSON.stringify({
-            ...buildQuery(),
-
-            response: {
-              format
-            }
-          })
+          body: JSON.stringify(query)
         }
       );
 
 
-    if (!response.ok) {
+    const text =
+      await response.text();
 
-      const text =
-        await response.text();
 
+    let json;
+
+
+    try {
+      json = JSON.parse(text);
+    } catch {
       throw new Error(
-        `Descarga fallida (HTTP ${response.status}). ${text.slice(0, 500)}`
+        `La API no devolvió JSON.\n\nHTTP ${response.status}\n\n${text.slice(0, 3000)}`
       );
     }
 
 
-    const blob =
-      await response.blob();
+    if (!response.ok) {
+
+      throw new Error(
+        `La API respondió HTTP ${response.status}.\n\n` +
+        JSON.stringify(json, null, 2)
+      );
+    }
 
 
-    const url =
-      URL.createObjectURL(blob);
+    currentResult =
+      parseEustatJsonStat(json);
 
 
-    const a =
-      document.createElement('a');
+    renderResult(currentResult);
 
 
-    a.href = url;
+    document
+      .getElementById("download-csv")
+      .disabled = false;
 
 
-    a.download =
-      `${state.table.id}.${format === 'xlsx' ? 'xlsx' : 'csv'}`;
+    document
+      .getElementById("copy-api")
+      .disabled = false;
 
 
-    document.body.appendChild(a);
-
-    a.click();
-
-    a.remove();
+    document
+      .getElementById("download-excel")
+      .disabled = true;
 
 
-    URL.revokeObjectURL(url);
+    /*
+     * Guardamos la query para poder copiarla.
+     */
+
+    document
+      .getElementById("copy-api")
+      .dataset.query =
+      JSON.stringify(query, null, 2);
+
 
   } catch (error) {
 
-    alert(error.message);
+    renderQueryError(
+      error,
+      query
+    );
 
+  } finally {
+
+    showButton.disabled = false;
   }
 }
 
 
 /* =========================================================
-   COPIAR QUERY
-========================================================= */
+   PARSER JSON-STAT 1.2
+   ========================================================= */
 
-async function copyQuery() {
+/*
+ * Eustat devuelve actualmente una estructura de este estilo:
+ *
+ * {
+ *   "dataset": {
+ *
+ *     "dimension": {
+ *
+ *       "Sector": {
+ *         "category": {
+ *           "index": {...},
+ *           "label": {...}
+ *         }
+ *       },
+ *
+ *       "periodo": {
+ *         "category": {
+ *           "index": {...},
+ *           "label": {...}
+ *         }
+ *       }
+ *
+ *     },
+ *
+ *     "id": [
+ *       "Sector",
+ *       "periodo"
+ *     ],
+ *
+ *     "size": [
+ *       1,
+ *       5
+ *     ],
+ *
+ *     "value": [
+ *       100,
+ *       104.5,
+ *       107.8,
+ *       111.1,
+ *       115
+ *     ]
+ *
+ *   }
+ * }
+ *
+ *
+ * NO hacemos:
+ *
+ * Object.entries(dataset)
+ *
+ * porque eso convertiría "id", "size", etc.
+ * en falsas columnas.
+ *
+ *
+ * Utilizamos:
+ *
+ * dataset.id
+ * dataset.size
+ * dataset.dimension
+ * dataset.value
+ */
 
-  const query =
-    JSON.stringify(
-      buildQuery(),
-      null,
-      2
+
+/**
+ * Obtiene el objeto dataset tanto si Eustat
+ * lo devuelve directamente como si viene
+ * dentro de { dataset: ... }.
+ */
+function getDataset(json) {
+
+  if (
+    json &&
+    json.dataset &&
+    typeof json.dataset === "object"
+  ) {
+    return json.dataset;
+  }
+
+
+  if (
+    json &&
+    Array.isArray(json.id) &&
+    Array.isArray(json.size)
+  ) {
+    return json;
+  }
+
+
+  throw new Error(
+    "El JSON-stat no contiene un dataset reconocible."
+  );
+}
+
+
+/**
+ * Convierte category.index a una lista ordenada
+ * de códigos.
+ *
+ * JSON-stat permite que index sea:
+ *
+ * {
+ *   "10": 0,
+ *   "20": 1
+ * }
+ *
+ * o una lista.
+ */
+function getCategoryCodes(category) {
+
+  if (!category) {
+    return [];
+  }
+
+
+  const index =
+    category.index;
+
+
+  if (Array.isArray(index)) {
+    return index.map(String);
+  }
+
+
+  if (
+    index &&
+    typeof index === "object"
+  ) {
+
+    return Object.entries(index)
+      .sort((a, b) => {
+        return Number(a[1]) - Number(b[1]);
+      })
+      .map(([code]) => code);
+  }
+
+
+  /*
+   * Si no hay index pero sí label,
+   * usamos el orden de label.
+   */
+
+  if (
+    category.label &&
+    typeof category.label === "object"
+  ) {
+
+    return Object.keys(category.label);
+  }
+
+
+  return [];
+}
+
+
+/**
+ * Obtiene etiqueta descriptiva de una categoría.
+ */
+function getCategoryLabel(
+  category,
+  code
+) {
+
+  if (
+    category &&
+    category.label &&
+    Object.prototype.hasOwnProperty.call(
+      category.label,
+      code
+    )
+  ) {
+    return category.label[code];
+  }
+
+
+  return code;
+}
+
+
+/**
+ * Producto cartesiano / decodificación
+ * del vector "value".
+ *
+ * En JSON-stat la última dimensión
+ * es la que varía más rápidamente.
+ */
+function decodeJsonStatValues(
+  dimensionIds,
+  dimensionSizes,
+  dimensionInfo,
+  values
+) {
+
+  const rows = [];
+
+
+  const totalCells =
+    dimensionSizes.reduce(
+      (acc, size) => acc * size,
+      1
     );
 
 
-  await navigator.clipboard.writeText(
+  for (
+    let flatIndex = 0;
+    flatIndex < totalCells;
+    flatIndex++
+  ) {
 
-    `${API}/${state.table.id}
-
-POST body:
-
-${query}`
-
-  );
+    const row = {};
 
 
-  alert('Consulta API copiada.');
+    let remainder =
+      flatIndex;
+
+
+    /*
+     * Recorremos de derecha a izquierda
+     * porque la última dimensión cambia
+     * más rápidamente.
+     */
+
+    for (
+      let dimensionIndex =
+        dimensionIds.length - 1;
+
+      dimensionIndex >= 0;
+
+      dimensionIndex--
+    ) {
+
+      const size =
+        dimensionSizes[dimensionIndex];
+
+
+      const position =
+        remainder % size;
+
+
+      remainder =
+        Math.floor(remainder / size);
+
+
+      const dimensionId =
+        dimensionIds[dimensionIndex];
+
+
+      const dimension =
+        dimensionInfo[dimensionId];
+
+
+      const category =
+        dimension?.category;
+
+
+      const codes =
+        getCategoryCodes(category);
+
+
+      const code =
+        codes[position];
+
+
+      row[dimensionId] = {
+        code,
+        label: getCategoryLabel(
+          category,
+          code
+        )
+      };
+    }
+
+
+    row.__value =
+      Array.isArray(values)
+        ? values[flatIndex]
+        : null;
+
+
+    rows.push(row);
+  }
+
+
+  return rows;
 }
 
 
-/* =========================================================
-   CATÁLOGO
-========================================================= */
+/**
+ * Parser principal.
+ */
+function parseEustatJsonStat(json) {
 
-function renderCatalog() {
-
-  app.innerHTML = `
-
-    <main class="catalog">
-
-      <div class="catalog-inner">
-
-        <h1>
-          Eustatbank
-        </h1>
-
-        <p>
-          Explora las tablas estadísticas de Eustat
-          con una experiencia inspirada en PxWeb.
-        </p>
+  const dataset =
+    getDataset(json);
 
 
-        <div class="search">
-
-          <input
-            id="q"
-            placeholder="Buscar por título, operación, variable o palabra clave…"
-            autocomplete="off"
-          >
-
-        </div>
+  const dimensionIds =
+    Array.isArray(dataset.id)
+      ? dataset.id
+      : [];
 
 
-        <div class="catalog-grid">
-
-          <aside class="filters">
-
-            <div class="filter-block">
-              Contenido
-            </div>
-
-            <div class="filter-block">
-              Operación estadística
-            </div>
-
-            <div class="filter-block">
-              Frecuencia
-            </div>
-
-            <div class="filter-block">
-              Periodo
-            </div>
-
-          </aside>
+  const dimensionSizes =
+    Array.isArray(dataset.size)
+      ? dataset.size.map(Number)
+      : [];
 
 
-          <section>
-
-            <div class="results-head">
-
-              <strong id="count">
-                ${catalog.length.toLocaleString('es-ES')}
-                tablas
-              </strong>
-
-              <span>
-                Ordenadas por actualización
-              </span>
-
-            </div>
+  const dimensionInfo =
+    dataset.dimension;
 
 
-            <div id="cards"></div>
-
-          </section>
-
-        </div>
-
-      </div>
-
-    </main>
-  `;
+  const values =
+    Array.isArray(dataset.value)
+      ? dataset.value
+      : [];
 
 
-  const input =
-    document.querySelector('#q');
+  if (
+    dimensionIds.length === 0 ||
+    dimensionSizes.length === 0
+  ) {
+    throw new Error(
+      "El JSON-stat no contiene dimensiones."
+    );
+  }
 
 
-  input.addEventListener(
-    'input',
-    () => paintCards(input.value)
-  );
+  if (
+    dimensionIds.length !==
+    dimensionSizes.length
+  ) {
+    throw new Error(
+      "JSON-stat inconsistente: id y size no tienen la misma longitud."
+    );
+  }
 
 
-  paintCards('');
-}
+  const expectedCells =
+    dimensionSizes.reduce(
+      (acc, size) => acc * size,
+      1
+    );
 
 
-/* =========================================================
-   PINTAR TARJETAS DEL CATÁLOGO
-========================================================= */
+  if (values.length < expectedCells) {
 
-function paintCards(term) {
-
-  const search =
-    term
-      .trim()
-      .toLocaleLowerCase('es');
+    throw new Error(
+      `JSON-stat inconsistente: se esperaban ${expectedCells} valores y se recibieron ${values.length}.`
+    );
+  }
 
 
   const rows =
-    catalog
-
-      .filter(table => {
-
-        if (!search) return true;
-
-        const text =
-          table.search_text ||
-          table.title ||
-          '';
-
-        return text
-          .toLocaleLowerCase('es')
-          .includes(search);
-      })
-
-      /*
-       * MUY IMPORTANTE:
-       *
-       * updated viene como:
-       *
-       * 2026-06-02T09:23:43
-       *
-       * Por tanto lo convertimos a fecha real.
-       */
-      .sort((a, b) =>
-        parseDate(b.updated) -
-        parseDate(a.updated)
-      );
+    decodeJsonStatValues(
+      dimensionIds,
+      dimensionSizes,
+      dimensionInfo,
+      values
+    );
 
 
-  document.querySelector('#count').textContent =
-    `${rows.length.toLocaleString('es-ES')} tablas`;
-
-
-  document.querySelector('#cards').innerHTML =
-
+  return {
+    title: dataset.label || currentMetadata?.title || "",
+    dimensions: dimensionIds,
     rows
-      .slice(0, 100)
-      .map(table => `
-
-        <article class="table-card">
-
-          <h2>
-            ${esc(table.title || table.text)}
-          </h2>
-
-
-          <p>
-
-            <strong>
-              ${esc(table.id)}
-            </strong>
-
-            ·
-
-            ${esc(table.first_period || '')}
-
-            ${table.last_period
-              ? `— ${esc(table.last_period)}`
-              : ''
-            }
-
-            · Actualizada
-            ${esc(fmtDate(table.updated))}
-
-          </p>
-
-
-          <div class="tags">
-
-            ${
-              table.operacion_titulo
-                ? `
-                  <span class="tag">
-                    ${esc(table.operacion_titulo)}
-                  </span>
-                `
-                : ''
-            }
-
-
-            ${
-              table.frecuencia
-                ? `
-                  <span class="tag">
-                    ${esc(table.frecuencia)}
-                  </span>
-                `
-                : ''
-            }
-
-
-            ${
-              (table.variables || [])
-                .slice(0, 5)
-                .map(variable => `
-                  <span class="tag">
-                    ${esc(variable.text || variable)}
-                  </span>
-                `)
-                .join('')
-            }
-
-          </div>
-
-
-          <a
-            class="open"
-            href="#/table/${encodeURIComponent(table.id)}"
-          >
-            Abrir tabla →
-          </a>
-
-        </article>
-
-      `)
-      .join('')
-
-    ||
-
-    `
-      <div class="empty">
-        No se encontraron tablas.
-      </div>
-    `;
+  };
 }
 
 
 /* =========================================================
-   ARRANQUE
-========================================================= */
+   RENDER RESULTADO
+   ========================================================= */
 
-loadCatalog()
+function renderResult(parsed) {
 
-  .then(() => {
+  const result =
+    document.getElementById("result");
 
-    route();
 
-  })
+  if (!parsed.rows.length) {
 
-  .catch(error => {
-
-    app.innerHTML = `
-
-      <main class="catalog">
-
-        <div class="catalog-inner">
-
-          <div class="error">
-
-            No se pudo cargar el catálogo:
-
-            ${esc(error.message)}
-
-          </div>
-
-        </div>
-
-      </main>
-
+    result.innerHTML = `
+      <div class="message">
+        <strong>La consulta no devuelve datos.</strong>
+      </div>
     `;
-  });
+
+    return;
+  }
 
 
-window.addEventListener(
-  'hashchange',
-  route
+  const headers =
+    parsed.dimensions;
+
+
+  const body =
+    parsed.rows
+      .map(row => {
+
+        const cells =
+          headers
+            .map(header => `
+              <td>
+                ${escapeHtml(
+                  row[header]?.label ??
+                  row[header]?.code ??
+                  ""
+                )}
+              </td>
+            `)
+            .join("");
+
+
+        return `
+          <tr>
+            ${cells}
+
+            <td class="value-cell">
+              ${escapeHtml(
+                formatValue(row.__value)
+              )}
+            </td>
+          </tr>
+        `;
+      })
+      .join("");
+
+
+  result.innerHTML = `
+    <div class="result-wrapper">
+
+      <table class="data-table">
+
+        <thead>
+          <tr>
+
+            ${headers
+              .map(header => `
+                <th>
+                  ${escapeHtml(
+                    getMetadataVariableLabel(header)
+                  )}
+                </th>
+              `)
+              .join("")}
+
+            <th>
+              Valor
+            </th>
+
+          </tr>
+        </thead>
+
+
+        <tbody>
+          ${body}
+        </tbody>
+
+      </table>
+
+    </div>
+
+
+    <details class="api-query">
+
+      <summary>
+        Estructura JSON-stat recibida
+      </summary>
+
+      <pre>${escapeHtml(
+        JSON.stringify(
+          parsed,
+          null,
+          2
+        )
+      )}</pre>
+
+    </details>
+  `;
+
+
+  /*
+   * Ahora sí tenemos datos reales.
+   */
+
+  document
+    .getElementById("download-csv")
+    .disabled = false;
+}
+
+
+/**
+ * Busca el texto descriptivo de una variable
+ * a partir de su código.
+ */
+function getMetadataVariableLabel(code) {
+
+  const variable =
+    currentMetadata.variables.find(
+      variable =>
+        variable.code === code
+    );
+
+
+  return (
+    variable?.text ||
+    variable?.code ||
+    code
+  );
+}
+
+
+/* =========================================================
+   ERRORES
+   ========================================================= */
+
+function renderTableError(error) {
+
+  app.innerHTML = `
+    <div class="page">
+
+      <div class="breadcrumbs">
+        <a href="#/">Tablas</a>
+      </div>
+
+
+      <div class="message message-error">
+
+        <strong>
+          No se pudieron cargar los metadatos.
+        </strong>
+
+        <pre>${escapeHtml(
+          error.message
+        )}</pre>
+
+      </div>
+
+    </div>
+  `;
+}
+
+
+function renderQueryError(
+  error,
+  query
+) {
+
+  const result =
+    document.getElementById("result");
+
+
+  result.innerHTML = `
+    <div class="message message-error">
+
+      <strong>
+        Error al consultar Eustat
+      </strong>
+
+      <div>
+        ${escapeHtml(error.message)}
+      </div>
+
+
+      <details class="api-query">
+
+        <summary>
+          Consulta enviada
+        </summary>
+
+        <pre>${escapeHtml(
+          JSON.stringify(
+            query,
+            null,
+            2
+          )
+        )}</pre>
+
+      </details>
+
+    </div>
+  `;
+}
+
+
+/* =========================================================
+   CSV
+   ========================================================= */
+
+function createCsv(parsed) {
+
+  const headers = [
+    ...parsed.dimensions,
+    "Valor"
+  ];
+
+
+  const rows = [
+    headers,
+    ...parsed.rows.map(row => [
+      ...parsed.dimensions.map(
+        dimension =>
+          row[dimension]?.label ??
+          row[dimension]?.code ??
+          ""
+      ),
+      row.__value ?? ""
+    ])
+  ];
+
+
+  return rows
+    .map(row =>
+      row
+        .map(cell =>
+          `"${String(cell ?? "")
+            .replaceAll('"', '""')}"`
+        )
+        .join(";")
+    )
+    .join("\r\n");
+}
+
+
+function downloadCsv() {
+
+  if (!currentResult) {
+    return;
+  }
+
+
+  const csv =
+    createCsv(currentResult);
+
+
+  const blob =
+    new Blob(
+      ["\uFEFF" + csv],
+      {
+        type: "text/csv;charset=utf-8;"
+      }
+    );
+
+
+  const url =
+    URL.createObjectURL(blob);
+
+
+  const link =
+    document.createElement("a");
+
+
+  link.href = url;
+
+  link.download =
+    `${currentTable.id.replaceAll(".px", "")}.csv`;
+
+
+  document.body.appendChild(link);
+
+  link.click();
+
+  link.remove();
+
+  URL.revokeObjectURL(url);
+}
+
+
+/* =========================================================
+   ROUTER
+   ========================================================= */
+
+function handleRoute() {
+
+  const hash =
+    location.hash || "#/";
+
+
+  if (
+    hash === "#/" ||
+    hash === "#"
+  ) {
+
+    if (!catalog.length) {
+      loadCatalog().catch(error => {
+        renderGlobalError(error);
+      });
+    } else {
+      renderHome();
+    }
+
+    return;
+  }
+
+
+  if (hash.startsWith("#/table/")) {
+
+    const encodedId =
+      hash.substring("#/table/".length);
+
+
+    const tableId =
+      decodeURIComponent(encodedId);
+
+
+    openTable(tableId);
+
+    return;
+  }
+
+
+  location.hash = "#/";
+}
+
+
+/* =========================================================
+   EVENTOS GLOBALES
+   ========================================================= */
+
+document.addEventListener(
+  "click",
+  event => {
+
+    const showButton =
+      event.target.closest("#show-table");
+
+
+    if (showButton) {
+      requestData();
+    }
+
+
+    const csvButton =
+      event.target.closest("#download-csv");
+
+
+    if (csvButton) {
+      downloadCsv();
+    }
+
+
+    const copyButton =
+      event.target.closest("#copy-api");
+
+
+    if (copyButton) {
+
+      const query =
+        copyButton.dataset.query;
+
+
+      if (query) {
+
+        navigator.clipboard
+          .writeText(query)
+          .then(() => {
+
+            const oldText =
+              copyButton.textContent;
+
+            copyButton.textContent =
+              "¡Copiada!";
+
+            setTimeout(() => {
+              copyButton.textContent =
+                oldText;
+            }, 1500);
+
+          })
+          .catch(() => {
+
+            alert(
+              "No se pudo copiar automáticamente la consulta."
+            );
+          });
+      }
+    }
+  }
 );
 
 
-/* Exponer funciones utilizadas por onclick */
-window.runQuery = runQuery;
-window.toggleValue = toggleValue;
-window.selectAll = selectAll;
-window.clearAll = clearAll;
-window.download = download;
-window.copyQuery = copyQuery;
+/* =========================================================
+   ERROR GLOBAL
+   ========================================================= */
+
+function renderGlobalError(error) {
+
+  app.innerHTML = `
+    <div class="page">
+
+      <div class="message message-error">
+
+        <strong>
+          No se pudo cargar Eustatbank.
+        </strong>
+
+        <pre>${escapeHtml(
+          error.message
+        )}</pre>
+
+      </div>
+
+    </div>
+  `;
+}
+
+
+/* =========================================================
+   INICIO
+   ========================================================= */
+
+window.addEventListener(
+  "hashchange",
+  handleRoute
+);
+
+
+handleRoute();
