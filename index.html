@@ -1,21 +1,64 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="es">
 <head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <meta name="description" content="Eustatbank — explorador de tablas estadísticas inspirado en PxWeb 2." />
+  <meta charset="UTF-8">
+  <meta
+    name="viewport"
+    content="width=device-width, initial-scale=1.0"
+  >
+
   <title>Eustatbank</title>
-  <link rel="stylesheet" href="./css/styles.css" />
+
+  <link rel="stylesheet" href="styles.css">
 </head>
+
 <body>
-  <header class="topbar">
-    <a class="brand" href="#/" aria-label="Eustatbank">
-      <span class="brand-mark">↗</span>
-      <span><strong>Eustat</strong><small>Eustatbank</small></span>
-    </a>
-    <nav><a href="#/">Tablas</a><a href="https://www.eustat.eus/" target="_blank" rel="noreferrer">Eustat</a><button id="langBtn">ES / EU / EN</button></nav>
+
+  <header class="site-header">
+    <div class="header-inner">
+
+      <a class="brand" href="#/">
+        <span class="brand-mark">↗</span>
+
+        <span class="brand-text">
+          <strong>Eustat</strong>
+          <small>Eustatbank</small>
+        </span>
+      </a>
+
+      <nav class="main-nav">
+        <a href="#/">Tablas</a>
+        <a
+          href="https://www.eustat.eus/"
+          target="_blank"
+          rel="noopener noreferrer"
+        >
+          Eustat
+        </a>
+
+        <span class="language-links">
+          ES / EU / EN
+        </span>
+      </nav>
+
+    </div>
   </header>
-  <div id="app"></div>
-  <script type="module" src="./js/app.js"></script>
+
+
+  <main id="app"></main>
+
+
+  <footer class="site-footer">
+    <div class="footer-inner">
+      <strong>Eustatbank</strong>
+      <span>
+        Datos consultados directamente desde la API pública de Eustat.
+      </span>
+    </div>
+  </footer>
+
+
+  <script type="module" src="app.js"></script>
+
 </body>
 </html>
