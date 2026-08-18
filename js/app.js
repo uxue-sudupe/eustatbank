@@ -618,33 +618,28 @@ function renderVariables() {
 
 
       const search =
-        variableElement.querySelector(
-          ".variable-search"
-        );
+  variableElement.querySelector(
+    ".variable-search"
+  );
 
+if (search) {
+  search.addEventListener("input", () => {
+    const query =
+      search.value
+        .trim()
+        .toLocaleLowerCase("es");
 
-      search.addEventListener("input", () => {
-
-        const query =
-          search.value
-            .trim()
+    variableElement
+      .querySelectorAll(".option")
+      .forEach(option => {
+        const text =
+          option.textContent
             .toLocaleLowerCase("es");
 
-
-        variableElement
-          .querySelectorAll(".option")
-          .forEach(option => {
-
-            const text =
-              option.textContent
-                .toLocaleLowerCase("es");
-
-            option.hidden =
-              query && !text.includes(query);
-          });
+        option.hidden =
+          query && !text.includes(query);
       });
-    }
-  );
+  });
 }
 
 
