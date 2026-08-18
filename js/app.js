@@ -158,35 +158,50 @@ async function getMetadata(id) {
 
 
 async function postQuery(id, query) {
-  const response =
-    await fetch(
-      `${API_BASE}/${encodeURIComponent(id)}`,
-      {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Accept: 'application/json'
-        },
-        body: JSON.stringify({
-          query,
-          response: {
-            format: 'json-stat'
-          }
-        })
-      }
-    );
+
+  const response = await fetch(
+    `${API_BASE}/${encodeURIComponent(id)}`,
+    {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Accept': 'application/json'
+      },
+      body: JSON.stringify({
+        query,
+        response: {
+          format: 'json-stat'
+        }
+      })
+    }
+  );
+
+  const text = await response.text();
+
+  console.log('EUSTAT HTTP:', response.status);
+  console.log('EUSTAT RESPONSE:', text);
 
   if (!response.ok) {
-    const text =
-      await response.text().catch(() => '');
 
     throw new Error(
-      `La API respondió HTTP ${response.status}` +
-      (text ? `: ${text}` : '')
+      `Eustat HTTP ${response.status}: ${text}`
     );
   }
 
-  return response.json();
+  let json;
+
+  try {
+
+    json = JSON.parse(text);
+
+  } catch (error) {
+
+    throw new Error(
+      `Eustat no devolvió JSON válido:\n${text}`
+    );
+  }
+
+  return json;
 }
 
 
