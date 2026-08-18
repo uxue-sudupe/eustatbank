@@ -1,13 +1,15 @@
 const API_BASE =
   'https://www.eustat.eus/bankupx/api/v1/es/DB';
 
-const CATALOG_URL = './data/index_es.json';
+const CATALOG_URL =
+  './data/index_es.json';
 
-const app = document.querySelector('#app');
+const app =
+  document.querySelector('#app');
 
 let catalog = [];
 
-let state = {
+const state = {
   table: null,
   metadata: null,
   selections: {},
@@ -20,13 +22,16 @@ let state = {
    ========================================================= */
 
 function escapeHtml(value) {
-  return String(value ?? '').replace(/[&<>"']/g, char => ({
-    '&': '&amp;',
-    '<': '&lt;',
-    '>': '&gt;',
-    '"': '&quot;',
-    "'": '&#039;'
-  }[char]));
+  return String(value ?? '').replace(
+    /[&<>"']/g,
+    char => ({
+      '&': '&amp;',
+      '<': '&lt;',
+      '>': '&gt;',
+      '"': '&quot;',
+      "'": '&#039;'
+    }[char])
+  );
 }
 
 
@@ -63,45 +68,51 @@ function formatDate(value) {
 
 
 /*
- * Algunos códigos de periodo pueden ser:
+ * Ordenación de periodos.
+ *
+ * Solo afecta a la interfaz.
+ * Nunca modifica los códigos enviados a Eustat.
+ *
+ * Ejemplos:
  *
  * 2025
- * 2025-1
- * 2025-01
- * 2025T1
- * 2025M01
+ * 2024
+ * 2023
  *
- * Esta función intenta extraer el año para poder
- * ordenar de más reciente a más antiguo.
+ * 2025-12
+ * 2025-11
+ *
+ * 2025-4
+ * 2025-3
+ *
+ * 2025-01
  */
-function timeSortValue(value) {
+
+function periodSortValue(value) {
   const text = String(value);
 
-  const year = text.match(/^(\d{4})/);
+  const yearMatch =
+    text.match(/^(\d{4})/);
 
-  if (!year) {
+  if (!yearMatch) {
     return null;
   }
 
-  const yearNumber = Number(year[1]);
+  const year =
+    Number(yearMatch[1]);
 
-  const rest = text.slice(4);
+  const rest =
+    text.slice(4);
 
-  /*
-   * Si hay trimestre/mes/número posterior al año,
-   * también intentamos utilizarlo.
-   */
-  const number = rest.match(/(\d+)/);
+  const numberMatch =
+    rest.match(/(\d+)/);
 
-  const subPeriod =
-    number
-      ? Number(number[1])
+  const period =
+    numberMatch
+      ? Number(numberMatch[1])
       : 0;
 
-  return (
-    yearNumber * 1000 +
-    subPeriod
-  );
+  return year * 1000 + period;
 }
 
 
@@ -115,7 +126,7 @@ async function loadCatalog() {
 
   if (!response.ok) {
     throw new Error(
-      `No se pudo cargar el catálogo (${response.status})`
+      `No se pudo cargar el catálogo (${response.status}).`
     );
   }
 
@@ -135,78 +146,108 @@ async function loadCatalog() {
    API EUSTAT
    ========================================================= */
 
-async function getMetadata(id) {
+async function getMetadata(tableId) {
+  const url =
+    `${API_BASE}/${encodeURIComponent(tableId)}`;
+
   const response =
-    await fetch(
-      `${API_BASE}/${encodeURIComponent(id)}`,
-      {
-        method: 'GET',
-        headers: {
-          Accept: 'application/json'
-        }
+    await fetch(url, {
+      method: 'GET',
+      headers: {
+        Accept: 'application/json'
       }
-    );
+    });
+
+  const text =
+    await response.text();
 
   if (!response.ok) {
     throw new Error(
-      `No se pudieron obtener los metadatos (${response.status})`
+      `No se pudieron obtener los metadatos (${response.status}).`
     );
   }
 
-  return response.json();
+  try {
+    return JSON.parse(text);
+  } catch {
+    throw new Error(
+      'Eustat no devolvió metadatos JSON válidos.'
+    );
+  }
 }
 
 
-async function postQuery(id, query) {
+async function postQuery(tableId, query) {
+  const url =
+    `${API_BASE}/${encodeURIComponent(tableId)}`;
 
-  const response = await fetch(
-    `${API_BASE}/${encodeURIComponent(id)}`,
-    {
+  const body = {
+    query,
+    response: {
+      format: 'json-stat'
+    }
+  };
+
+  const response =
+    await fetch(url, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'Accept': 'application/json'
+        Accept: 'application/json'
       },
-      body: JSON.stringify({
-        query,
-        response: {
-          format: 'json-stat'
-        }
-      })
-    }
-  );
+      body: JSON.stringify(body)
+    });
 
-  const text = await response.text();
+  const text =
+    await response.text();
 
-  console.log('EUSTAT HTTP:', response.status);
-  console.log('EUSTAT RESPONSE:', text);
+  /*
+   * Muy importante:
+   *
+   * No intentamos interpretar la respuesta antes
+   * de comprobar el HTTP.
+   *
+   * Esto permite distinguir:
+   *
+   * 400 de Eustat
+   * respuesta JSON válida
+   * JSON-stat incorrecto
+   * etc.
+   */
 
   if (!response.ok) {
+    let message = text;
+
+    try {
+      const errorJson =
+        JSON.parse(text);
+
+      message =
+        errorJson.message ||
+        errorJson.error ||
+        errorJson.title ||
+        text;
+    } catch {
+      // La respuesta no era JSON.
+    }
 
     throw new Error(
-      `Eustat HTTP ${response.status}: ${text}`
+      `Eustat respondió HTTP ${response.status}: ${message}`
     );
   }
-
-  let json;
 
   try {
-
-    json = JSON.parse(text);
-
-  } catch (error) {
-
+    return JSON.parse(text);
+  } catch {
     throw new Error(
-      `Eustat no devolvió JSON válido:\n${text}`
+      `Eustat respondió correctamente, pero no devolvió JSON válido:\n${text.slice(0, 1000)}`
     );
   }
-
-  return json;
 }
 
 
 /* =========================================================
-   VARIABLES DE EUSTAT
+   METADATOS
    ========================================================= */
 
 function getVariableValues(variable) {
@@ -220,71 +261,54 @@ function getVariableValues(variable) {
       ? variable.valueTexts
       : [];
 
-  return codes.map((code, index) => ({
-    code: String(code),
-    label:
-      labels[index] !== undefined
-        ? String(labels[index])
-        : String(code),
-    originalIndex: index
-  }));
+  return codes.map(
+    (code, index) => ({
+      code: String(code),
+      label:
+        labels[index] !== undefined
+          ? String(labels[index])
+          : String(code),
+
+      originalIndex: index
+    })
+  );
 }
 
 
-/*
- * Orden visual de las categorías.
- *
- * IMPORTANTE:
- *
- * Solo cambiamos el orden en la interfaz.
- * Los códigos siguen siendo los códigos originales
- * de Eustat.
- *
- * Si variable.time === true:
- *     más reciente → más antiguo
- *
- * Si no:
- *     mantenemos el orden original de Eustat.
- */
 function getDisplayValues(variable) {
   const values =
     getVariableValues(variable);
+
+  /*
+   * Solo ordenamos de forma descendente
+   * las variables que Eustat marca como time.
+   */
 
   if (!variable.time) {
     return values;
   }
 
-  const sorted =
-    [...values].sort((a, b) => {
+  return [...values].sort(
+    (a, b) => {
+      const aValue =
+        periodSortValue(a.code);
 
-      const aTime =
-        timeSortValue(a.code);
+      const bValue =
+        periodSortValue(b.code);
 
-      const bTime =
-        timeSortValue(b.code);
-
-      /*
-       * Si no podemos interpretar los valores como
-       * periodos, mantenemos el orden original.
-       */
       if (
-        aTime === null ||
-        bTime === null
+        aValue === null ||
+        bValue === null
       ) {
-        return a.originalIndex - b.originalIndex;
+        return (
+          a.originalIndex -
+          b.originalIndex
+        );
       }
 
-      /*
-       * DESCENDENTE:
-       * 2025
-       * 2024
-       * 2023
-       * ...
-       */
-      return bTime - aTime;
-    });
-
-  return sorted;
+      return bValue - aValue;
+    }
+  );
 }
 
 
@@ -295,17 +319,22 @@ function getDisplayValues(variable) {
 function initializeSelections(metadata) {
   const selections = {};
 
-  for (const variable of metadata.variables || []) {
-
+  for (
+    const variable
+    of metadata.variables || []
+  ) {
     const values =
       getVariableValues(variable);
 
     /*
-     * Inicialmente seleccionamos el primer valor
-     * disponible, que es el comportamiento que
-     * queremos para que una tabla no llegue vacía
-     * al abrirla.
+     * Seleccionamos el primer código REAL
+     * del metadato, no el primer elemento
+     * de la lista visual.
+     *
+     * Esto es importante porque los periodos
+     * se muestran ordenados al revés.
      */
+
     selections[variable.code] =
       values.length
         ? [values[0].code]
@@ -317,76 +346,73 @@ function initializeSelections(metadata) {
 
 
 function getSelected(variableCode) {
-  return state.selections[variableCode] || [];
+  return (
+    state.selections[variableCode] ||
+    []
+  );
 }
 
 
-function setSelected(variableCode, values) {
+function setSelected(
+  variableCode,
+  values
+) {
   state.selections[variableCode] =
-    values.map(String);
+    [...new Set(values.map(String))];
 }
 
 
 /* =========================================================
-   CONSTRUIR QUERY
+   QUERY
    ========================================================= */
 
-/*
- * Esta es una de las partes importantes.
- *
- * NO conocemos de antemano las variables.
- *
- * Leemos las que devuelve Eustat y construimos
- * el query dinámicamente.
- */
 function buildQuery() {
+  return (
+    state.metadata.variables || []
+  )
+    .map(variable => {
+      const values =
+        getSelected(variable.code);
 
-  const query = [];
+      return {
+        code: variable.code,
 
-  for (
-    const variable
-    of state.metadata.variables || []
-  ) {
-
-    const selected =
-      getSelected(variable.code);
-
-    /*
-     * Si el usuario no ha seleccionado nada,
-     * no mandamos la consulta.
-     */
-    if (!selected.length) {
-      continue;
-    }
-
-    query.push({
-      code: variable.code,
-
-      selection: {
-        filter: 'item',
-        values: selected
-      }
+        selection: {
+          filter: 'item',
+          values
+        }
+      };
     });
-  }
+}
 
-  return query;
+
+function getQueryObject() {
+  return {
+    query: buildQuery(),
+
+    response: {
+      format: 'json-stat'
+    }
+  };
 }
 
 
 /* =========================================================
-   JSON-STAT 1.2
+   JSON-STAT
    ========================================================= */
 
-/*
- * Eustat devuelve:
- *
- * {
- *   "dataset": {
- *      ...
- *   }
- * }
- */
 function getDataset(response) {
+  /*
+   * Eustat utiliza:
+   *
+   * {
+   *   "dataset": {
+   *      ...
+   *   }
+   * }
+   *
+   * Pero aceptamos también un dataset directo.
+   */
 
   if (
     response &&
@@ -396,40 +422,26 @@ function getDataset(response) {
     return response.dataset;
   }
 
-  /*
-   * Permitimos también una respuesta JSON-stat
-   * sin wrapper.
-   */
   return response;
 }
 
 
 /*
- * Convierte:
- *
- * category.index
- *
- * en una lista ordenada.
- *
- * Ejemplo:
+ * category.index puede venir como:
  *
  * {
- *   "2021": 0,
- *   "2022": 1,
- *   "2023": 2
+ *   "100": 0,
+ *   "200": 1
  * }
  *
- * →
- *
- * [
- *   { code: "2021", index: 0 },
- *   { code: "2022", index: 1 },
- *   { code: "2023", index: 2 }
- * ]
+ * o como array.
  */
-function parseCategoryIndex(category) {
 
-  if (!category || !category.index) {
+function parseCategoryIndex(category) {
+  if (
+    !category ||
+    category.index === undefined
+  ) {
     return [];
   }
 
@@ -437,7 +449,6 @@ function parseCategoryIndex(category) {
     category.index;
 
   if (Array.isArray(index)) {
-
     return index.map(
       (code, position) => ({
         code: String(code),
@@ -446,13 +457,17 @@ function parseCategoryIndex(category) {
     );
   }
 
-  if (typeof index === 'object') {
-
+  if (
+    typeof index === 'object' &&
+    index !== null
+  ) {
     return Object.entries(index)
-      .map(([code, position]) => ({
-        code: String(code),
-        index: Number(position)
-      }))
+      .map(
+        ([code, position]) => ({
+          code: String(code),
+          index: Number(position)
+        })
+      )
       .filter(
         item =>
           Number.isFinite(item.index)
@@ -468,40 +483,84 @@ function parseCategoryIndex(category) {
 
 
 /*
- * Lee una dimensión completa.
+ * Algunas implementaciones de JSON-stat
+ * pueden devolver las etiquetas como arrays.
+ *
+ * Por eso no asumimos que siempre son
+ * simples strings.
  */
-function parseDimension(id, dimension) {
 
+function getCategoryLabel(
+  labels,
+  code,
+  index
+) {
+  if (!labels) {
+    return code;
+  }
+
+  if (
+    Array.isArray(labels) &&
+    labels[index] !== undefined
+  ) {
+    return String(labels[index]);
+  }
+
+  if (
+    typeof labels === 'object' &&
+    labels[code] !== undefined
+  ) {
+    const value =
+      labels[code];
+
+    if (
+      Array.isArray(value)
+    ) {
+      return String(
+        value[0] ?? code
+      );
+    }
+
+    return String(value);
+  }
+
+  return code;
+}
+
+
+function parseDimension(
+  id,
+  dimension
+) {
   const category =
     dimension.category || {};
-
-  const labels =
-    category.label &&
-    typeof category.label === 'object'
-      ? category.label
-      : {};
 
   const indexed =
     parseCategoryIndex(category);
 
+  const labels =
+    category.label;
 
   const categories =
     indexed.map(item => ({
       code: item.code,
 
       label:
-        labels[item.code] !== undefined
-          ? String(labels[item.code])
-          : item.code,
+        getCategoryLabel(
+          labels,
+          item.code,
+          item.index
+        ),
 
       index: item.index
     }));
 
-
   return {
     id,
+
     label:
-      dimension.label || id,
+      dimension.label ||
+      id,
 
     categories,
 
@@ -511,18 +570,7 @@ function parseDimension(id, dimension) {
 }
 
 
-/*
- * Lee las dimensiones en el orden indicado por
- * dataset.id.
- *
- * Esto es fundamental para JSON-stat:
- *
- * id + size + value
- *
- * determinan la posición de cada observación.
- */
 function parseDimensions(dataset) {
-
   const ids =
     Array.isArray(dataset.id)
       ? dataset.id.map(String)
@@ -530,15 +578,13 @@ function parseDimensions(dataset) {
           dataset.dimension || {}
         );
 
-
   return ids.map(id => {
-
     const dimension =
       dataset.dimension?.[id];
 
     if (!dimension) {
       throw new Error(
-        `No se encontró la dimensión "${id}".`
+        `JSON-stat: no existe la dimensión "${id}".`
       );
     }
 
@@ -551,37 +597,33 @@ function parseDimensions(dataset) {
 
 
 /*
- * Convierte una posición plana del array value
- * en las posiciones de cada dimensión.
- *
- * Ejemplo:
+ * JSON-stat utiliza un array plano.
  *
  * size = [2, 3]
  *
- * value[0] → [0,0]
- * value[1] → [0,1]
- * value[2] → [0,2]
- * value[3] → [1,0]
- * ...
+ * significa:
+ *
+ * dimensión 1 = 2 categorías
+ * dimensión 2 = 3 categorías
+ *
+ * La última dimensión cambia más rápido.
  */
+
 function flatIndexToCoordinates(
   flatIndex,
   sizes
 ) {
-
   const coordinates =
     new Array(sizes.length);
 
   let remainder =
     flatIndex;
 
-
   for (
     let i = sizes.length - 1;
     i >= 0;
     i--
   ) {
-
     const size =
       Number(sizes[i]);
 
@@ -607,20 +649,47 @@ function flatIndexToCoordinates(
 
 
 /*
- * Parser principal.
+ * Obtiene un valor del array JSON-stat.
  *
- * Devuelve:
+ * Normalmente value es un array.
  *
- * {
- *   dimensions,
- *   rows
- * }
+ * También toleramos:
+ *
+ * - null
+ * - valores ausentes
+ * - objetos indexados
  */
-function parseJsonStat(response) {
 
+function getValue(
+  values,
+  flatIndex
+) {
+  if (
+    Array.isArray(values)
+  ) {
+    return (
+      values[flatIndex] ??
+      null
+    );
+  }
+
+  if (
+    values &&
+    typeof values === 'object'
+  ) {
+    return (
+      values[flatIndex] ??
+      null
+    );
+  }
+
+  return null;
+}
+
+
+function parseJsonStat(response) {
   const dataset =
     getDataset(response);
-
 
   if (!dataset) {
     throw new Error(
@@ -628,31 +697,30 @@ function parseJsonStat(response) {
     );
   }
 
+  /*
+   * Eustat debería devolver:
+   *
+   * id
+   * size
+   * dimension
+   * value
+   */
 
   if (
-    !dataset.id ||
-    !dataset.size ||
+    !Array.isArray(dataset.id) ||
+    !Array.isArray(dataset.size) ||
     !dataset.dimension
   ) {
     throw new Error(
-      'La respuesta no tiene una estructura JSON-stat reconocible.'
+      'La respuesta no contiene una estructura JSON-stat reconocible.'
     );
   }
-
 
   const dimensions =
     parseDimensions(dataset);
 
-
   const sizes =
     dataset.size.map(Number);
-
-
-  const values =
-    Array.isArray(dataset.value)
-      ? dataset.value
-      : [];
-
 
   const totalCells =
     sizes.reduce(
@@ -661,36 +729,31 @@ function parseJsonStat(response) {
       1
     );
 
-
   const rows = [];
 
-
-  /*
-   * Recorremos el cubo completo.
-   */
   for (
     let flatIndex = 0;
     flatIndex < totalCells;
     flatIndex++
   ) {
-
     const coordinates =
       flatIndexToCoordinates(
         flatIndex,
         sizes
       );
 
-
     const valuesByDimension = {};
     const codesByDimension = {};
 
-
     dimensions.forEach(
-      (dimension, dimensionIndex) => {
-
+      (
+        dimension,
+        dimensionIndex
+      ) => {
         const position =
-          coordinates[dimensionIndex];
-
+          coordinates[
+            dimensionIndex
+          ];
 
         const category =
           dimension.categories.find(
@@ -698,34 +761,23 @@ function parseJsonStat(response) {
               item.index === position
           );
 
+        valuesByDimension[
+          dimension.id
+        ] =
+          category
+            ? category.label
+            : '';
 
-        if (category) {
-
-          valuesByDimension[
-            dimension.id
-          ] = category.label;
-
-          codesByDimension[
-            dimension.id
-          ] = category.code;
-
-        } else {
-
-          valuesByDimension[
-            dimension.id
-          ] = '';
-
-          codesByDimension[
-            dimension.id
-          ] = '';
-        }
-
+        codesByDimension[
+          dimension.id
+        ] =
+          category
+            ? category.code
+            : '';
       }
     );
 
-
     rows.push({
-
       values:
         valuesByDimension,
 
@@ -733,16 +785,15 @@ function parseJsonStat(response) {
         codesByDimension,
 
       value:
-        values[flatIndex] !== undefined
-          ? values[flatIndex]
-          : null,
+        getValue(
+          dataset.value,
+          flatIndex
+        ),
 
       index:
         flatIndex
-
     });
   }
-
 
   return {
     dataset,
@@ -753,58 +804,54 @@ function parseJsonStat(response) {
 
 
 /* =========================================================
-   CATÁLOGO
+   CATÁLOGO - INTERFAZ
    ========================================================= */
 
 function renderCatalog() {
-
   app.innerHTML = `
-
-    <main class="catalog">
+    <main class="catalog-page">
 
       <div class="catalog-inner">
 
-        <h1>Eustat Statbank</h1>
+        <div class="catalog-intro">
+          <h1>Eustat Statbank</h1>
 
-        <p>
-          Explora las tablas estadísticas de Eustat.
-        </p>
-
-
-        <div class="search">
-
-          <input
-            id="search"
-            type="search"
-            placeholder="Buscar tablas..."
-            autocomplete="off"
-          >
-
+          <p>
+            Explora las tablas estadísticas de Eustat
+            con una experiencia inspirada en PxWeb.
+          </p>
         </div>
 
+        <div class="catalog-search">
+          <input
+            id="catalog-search"
+            type="search"
+            placeholder="Buscar por título, operación, variable o palabra clave..."
+            autocomplete="off"
+          >
+        </div>
 
         <div class="catalog-layout">
 
           <aside class="catalog-sidebar">
 
-            <div>
+            <div class="catalog-filter">
               <strong>Contenido</strong>
             </div>
 
-            <div>
+            <div class="catalog-filter">
               <strong>Operación estadística</strong>
             </div>
 
-            <div>
+            <div class="catalog-filter">
               <strong>Frecuencia</strong>
             </div>
 
-            <div>
+            <div class="catalog-filter">
               <strong>Periodo</strong>
             </div>
 
           </aside>
-
 
           <section>
 
@@ -814,7 +861,8 @@ function renderCatalog() {
             </div>
 
             <div
-              id="catalog-results">
+              id="catalog-results"
+              class="catalog-results">
             </div>
 
           </section>
@@ -826,10 +874,10 @@ function renderCatalog() {
     </main>
   `;
 
-
   const search =
-    document.querySelector('#search');
-
+    document.querySelector(
+      '#catalog-search'
+    );
 
   search.addEventListener(
     'input',
@@ -840,68 +888,56 @@ function renderCatalog() {
     }
   );
 
-
   renderCatalogResults('');
 }
 
 
-function renderCatalogResults(term) {
-
+function renderCatalogResults(
+  term
+) {
   const text =
     String(term || '')
       .trim()
       .toLocaleLowerCase('es');
 
-
   const results =
     catalog.filter(item => {
+      if (!text) return true;
 
-      if (!text) {
-        return true;
-      }
-
-      const searchable =
-        [
-          item.title,
-          item.text,
-          item.id,
-          item.search_text,
-          item.operacion_titulo
-        ]
-          .filter(Boolean)
-          .join(' ')
-          .toLocaleLowerCase('es');
-
+      const searchable = [
+        item.title,
+        item.text,
+        item.id,
+        item.search_text,
+        item.operacion_titulo
+      ]
+        .filter(Boolean)
+        .join(' ')
+        .toLocaleLowerCase('es');
 
       return searchable.includes(text);
     });
-
 
   const count =
     document.querySelector(
       '#catalog-count'
     );
 
-
   if (count) {
     count.textContent =
       `${results.length.toLocaleString('es-ES')} tablas`;
   }
-
 
   const container =
     document.querySelector(
       '#catalog-results'
     );
 
-
   if (!container) return;
 
-
   if (!results.length) {
-
     container.innerHTML = `
-      <div class="empty">
+      <div class="empty-state">
         No se encontraron tablas.
       </div>
     `;
@@ -909,12 +945,10 @@ function renderCatalogResults(term) {
     return;
   }
 
-
   container.innerHTML =
     results
       .slice(0, 100)
       .map(item => `
-
         <article class="table-card">
 
           <h2>
@@ -926,16 +960,20 @@ function renderCatalogResults(term) {
           </h2>
 
           <p class="table-id">
-            ${escapeHtml(item.id)}
+            ${escapeHtml(
+              item.id || ''
+            )}
           </p>
 
           ${
             item.updated
               ? `
-                <p>
+                <p class="table-date">
                   Actualizada:
                   ${escapeHtml(
-                    formatDate(item.updated)
+                    formatDate(
+                      item.updated
+                    )
                   )}
                 </p>
               `
@@ -943,117 +981,90 @@ function renderCatalogResults(term) {
           }
 
           <a
-            href="#/table/${encodeURIComponent(item.id)}"
-            class="open-table">
+            class="table-open"
+            href="#/table/${encodeURIComponent(item.id)}">
 
             Abrir tabla →
 
           </a>
 
         </article>
-
       `)
       .join('');
 }
 
 
 /* =========================================================
-   TABLA
+   ABRIR TABLA
    ========================================================= */
 
 async function openTable(id) {
-
   const table =
     catalog.find(
       item => item.id === id
     );
 
-
   if (!table) {
-
     location.hash = '#/';
-
     return;
   }
 
-
-  state = {
-    table,
-    metadata: null,
-    selections: {},
-    result: null
-  };
-
+  state.table = table;
+  state.metadata = null;
+  state.selections = {};
+  state.result = null;
 
   app.innerHTML = `
-
-    <main class="catalog">
-
-      <div class="catalog-inner">
-
-        <div class="loading">
-          Cargando metadatos...
-        </div>
-
+    <main class="loading-page">
+      <div class="loading-card">
+        Cargando metadatos de Eustat…
       </div>
-
     </main>
   `;
 
-
   try {
-
     const metadata =
       await getMetadata(id);
 
+    if (
+      !metadata ||
+      !Array.isArray(
+        metadata.variables
+      )
+    ) {
+      throw new Error(
+        'Eustat no devolvió metadatos de tabla reconocibles.'
+      );
+    }
 
-    /*
-     * Guardamos los metadatos reales de Eustat.
-     */
     state.metadata =
       metadata;
 
-
-    /*
-     * Creamos las selecciones a partir de las
-     * variables que realmente tiene esta tabla.
-     */
     state.selections =
       initializeSelections(
         metadata
       );
 
-
     renderTablePage();
 
-
   } catch (error) {
-
-    renderError(
-      error
-    );
+    renderError(error);
   }
 }
 
 
 /* =========================================================
-   INTERFAZ DE TABLA
+   PÁGINA DE TABLA
    ========================================================= */
 
 function renderTablePage() {
-
   const metadata =
     state.metadata;
 
-
   const variables =
-    Array.isArray(metadata.variables)
-      ? metadata.variables
-      : [];
-
+    metadata.variables || [];
 
   app.innerHTML = `
-
     <main class="table-page">
 
       <div class="table-page-inner">
@@ -1076,87 +1087,78 @@ function renderTablePage() {
 
         </div>
 
+        <div class="table-header">
 
-        <h1>
-          ${escapeHtml(
-            metadata.title ||
-            state.table.title ||
-            state.table.id
-          )}
-        </h1>
+          <h1>
+            ${escapeHtml(
+              metadata.title ||
+              state.table.title ||
+              state.table.id
+            )}
+          </h1>
 
+          <p class="table-api-note">
+            ⓘ Consulta datos directamente desde
+            la API pública de Eustat.
+          </p>
+
+        </div>
 
         <div class="table-layout">
 
-          <aside class="filters">
+          <aside class="filter-pane">
 
-            <h2>
-              Seleccionar datos
-            </h2>
+            <div class="filter-pane-header">
+
+              <h2>
+                Seleccionar datos
+              </h2>
+
+            </div>
 
             <div id="filters">
 
-              ${
-                variables
-                  .map(
-                    renderVariable
-                  )
-                  .join('')
-              }
+              ${variables
+                .map(renderVariable)
+                .join('')}
 
             </div>
 
           </aside>
 
+          <section class="results-pane">
 
-          <section class="table-results">
-
-            <div class="actions">
+            <div class="toolbar">
 
               <button
                 id="show-data"
-                class="primary-button">
-
+                class="button button-primary">
                 Mostrar tabla
-
               </button>
-
 
               <button
                 id="download-csv"
-                class="outline-button"
+                class="button button-secondary"
                 disabled>
-
                 Descargar CSV
-
               </button>
-
 
               <button
                 id="copy-query"
-                class="outline-button">
-
+                class="button button-secondary">
                 Copiar consulta API
-
               </button>
 
             </div>
 
+            <div id="status"></div>
 
-            <div
-              id="status">
-            </div>
+            <div id="result">
 
-
-            <div
-              id="result">
-
-              <div class="table-placeholder">
-
+              <div class="result-placeholder">
                 Selecciona los valores que quieras
                 consultar y pulsa
                 <strong>Mostrar tabla</strong>.
-
               </div>
 
             </div>
@@ -1170,9 +1172,7 @@ function renderTablePage() {
     </main>
   `;
 
-
   attachVariableEvents();
-
 
   document
     .querySelector('#show-data')
@@ -1181,14 +1181,12 @@ function renderTablePage() {
       executeQuery
     );
 
-
   document
     .querySelector('#download-csv')
     .addEventListener(
       'click',
       downloadCSV
     );
-
 
   document
     .querySelector('#copy-query')
@@ -1200,148 +1198,150 @@ function renderTablePage() {
 
 
 /* =========================================================
-   RENDER VARIABLE
+   FILTROS
    ========================================================= */
 
 function renderVariable(variable) {
-
   const values =
     getDisplayValues(variable);
-
 
   const selected =
     getSelected(
       variable.code
     );
 
-
-  const variableId =
+  const id =
     encodeURIComponent(
       variable.code
     );
 
-
   return `
+    <section
+      class="filter-card"
+      data-variable="${escapeHtml(
+        variable.code
+      )}">
 
-    <div
-      class="variable"
-      data-variable="${escapeHtml(variable.code)}">
+      <div class="filter-card-header">
 
-      <div class="variable-header">
+        <div>
+          <h3>
+            ${escapeHtml(
+              variable.text ||
+              variable.code
+            )}
+          </h3>
 
-        <h3>
-          ${escapeHtml(
-            variable.text ||
+          <span class="selection-badge">
+            ${selected.length}
+            de
+            ${values.length}
+            seleccionados
+          </span>
+        </div>
+
+      </div>
+
+      <div class="filter-actions">
+
+        <button
+          type="button"
+          data-select-all="${escapeHtml(
             variable.code
-          )}
-        </h3>
-
-        <span
-          class="selection-count"
-          id="count-${variableId}">
-
-          ${selected.length}
-          / ${values.length}
-
-        </span>
-
-      </div>
-
-
-      <div class="variable-actions">
-
-        <button
-          type="button"
-          data-select-all="${escapeHtml(variable.code)}">
-
+          )}">
           Todos
-
         </button>
-
 
         <button
           type="button"
-          data-select-none="${escapeHtml(variable.code)}">
-
+          data-select-none="${escapeHtml(
+            variable.code
+          )}">
           Ninguno
-
         </button>
 
       </div>
 
+      ${
+        values.length > 12
+          ? `
+            <div class="filter-search">
 
-      <div class="variable-search">
+              <input
+                type="search"
+                placeholder="Buscar..."
+                data-variable-search="${escapeHtml(
+                  variable.code
+                )}">
 
-        <input
-          type="search"
-          placeholder="Buscar..."
-          data-variable-search="${escapeHtml(variable.code)}"
-        >
-
-      </div>
-
+            </div>
+          `
+          : ''
+      }
 
       <div
-        class="variable-values"
-        data-values="${escapeHtml(variable.code)}">
+        class="value-list"
+        data-values="${escapeHtml(
+          variable.code
+        )}">
 
         ${
           values
             .map(item => `
-
               <label
                 class="value-option"
                 data-label="${escapeHtml(
-                  item.label.toLocaleLowerCase('es')
+                  item.label
+                    .toLocaleLowerCase(
+                      'es'
+                    )
                 )}">
 
                 <input
                   type="checkbox"
-
                   data-variable="${escapeHtml(
                     variable.code
                   )}"
-
                   data-code="${escapeHtml(
                     item.code
                   )}"
-
                   ${
-                    selected.includes(item.code)
+                    selected.includes(
+                      item.code
+                    )
                       ? 'checked'
                       : ''
                   }
                 >
 
                 <span>
-                  ${escapeHtml(item.label)}
+                  ${escapeHtml(
+                    item.label
+                  )}
                 </span>
 
               </label>
-
             `)
             .join('')
         }
 
       </div>
 
-    </div>
+    </section>
   `;
 }
 
 
 /* =========================================================
-   EVENTOS
+   EVENTOS DE FILTROS
    ========================================================= */
 
 function attachVariableEvents() {
-
   document
     .querySelectorAll(
-      '.value-option input[type="checkbox"]'
+      '.value-option input'
     )
     .forEach(input => {
-
       input.addEventListener(
         'change',
         () => {
@@ -1352,34 +1352,29 @@ function attachVariableEvents() {
           const code =
             input.dataset.code;
 
-
           let selected =
             getSelected(variable);
 
-
           if (input.checked) {
-
-            if (!selected.includes(code)) {
+            if (
+              !selected.includes(code)
+            ) {
               selected.push(code);
             }
-
           } else {
-
             selected =
               selected.filter(
-                value =>
-                  value !== code
+                item =>
+                  item !== code
               );
           }
-
 
           setSelected(
             variable,
             selected
           );
 
-
-          updateSelectionCount(
+          updateFilterCard(
             variable
           );
         }
@@ -1387,15 +1382,11 @@ function attachVariableEvents() {
     });
 
 
-  /*
-   * TODOS
-   */
   document
     .querySelectorAll(
       '[data-select-all]'
     )
     .forEach(button => {
-
       button.addEventListener(
         'click',
         () => {
@@ -1403,20 +1394,18 @@ function attachVariableEvents() {
           const code =
             button.dataset.selectAll;
 
-
           const variable =
             state.metadata.variables.find(
               item =>
                 item.code === code
             );
 
-
           if (!variable) return;
 
-
           const values =
-            getVariableValues(variable);
-
+            getVariableValues(
+              variable
+            );
 
           setSelected(
             code,
@@ -1425,7 +1414,6 @@ function attachVariableEvents() {
             )
           );
 
-
           refreshVariable(
             code
           );
@@ -1434,15 +1422,11 @@ function attachVariableEvents() {
     });
 
 
-  /*
-   * NINGUNO
-   */
   document
     .querySelectorAll(
       '[data-select-none]'
     )
     .forEach(button => {
-
       button.addEventListener(
         'click',
         () => {
@@ -1450,12 +1434,10 @@ function attachVariableEvents() {
           const code =
             button.dataset.selectNone;
 
-
           setSelected(
             code,
             []
           );
-
 
           refreshVariable(
             code
@@ -1465,15 +1447,11 @@ function attachVariableEvents() {
     });
 
 
-  /*
-   * BUSCAR DENTRO DE UNA VARIABLE
-   */
   document
     .querySelectorAll(
       '[data-variable-search]'
     )
     .forEach(input => {
-
       input.addEventListener(
         'input',
         () => {
@@ -1481,28 +1459,37 @@ function attachVariableEvents() {
           const code =
             input.dataset.variableSearch;
 
-
           const term =
             input.value
               .trim()
-              .toLocaleLowerCase('es');
+              .toLocaleLowerCase(
+                'es'
+              );
 
+          const container =
+            document.querySelector(
+              `[data-values="${CSS.escape(
+                code
+              )}"]`
+            );
 
-          document
+          if (!container) return;
+
+          container
             .querySelectorAll(
-              `[data-values="${CSS.escape(code)}"] .value-option`
+              '.value-option'
             )
             .forEach(option => {
 
               const label =
-                option.dataset.label || '';
+                option.dataset.label ||
+                '';
 
-
-              option.style.display =
-                !term ||
-                label.includes(term)
-                  ? ''
-                  : 'none';
+              option.hidden =
+                !!term &&
+                !label.includes(
+                  term
+                );
             });
         }
       );
@@ -1511,116 +1498,105 @@ function attachVariableEvents() {
 
 
 /* =========================================================
-   ACTUALIZAR SELECCIÓN
+   ACTUALIZAR FILTRO
    ========================================================= */
 
-function updateSelectionCount(
+function updateFilterCard(
   variableCode
 ) {
-
   const variable =
     state.metadata.variables.find(
       item =>
         item.code === variableCode
     );
 
-
   if (!variable) return;
 
+  const card =
+    document.querySelector(
+      `.filter-card[data-variable="${CSS.escape(
+        variableCode
+      )}"]`
+    );
 
-  const id =
-    `count-${encodeURIComponent(
-      variableCode
-    )}`;
+  if (!card) return;
 
+  const badge =
+    card.querySelector(
+      '.selection-badge'
+    );
 
-  const element =
-    document.getElementById(id);
-
-
-  if (!element) return;
-
-
-  element.textContent =
-    `${getSelected(variableCode).length} / ${
-      getVariableValues(variable).length
-    }`;
+  if (badge) {
+    badge.textContent =
+      `${getSelected(variableCode).length} de ${
+        getVariableValues(variable).length
+      } seleccionados`;
+  }
 }
 
 
 function refreshVariable(
   variableCode
 ) {
-
   const selected =
     getSelected(variableCode);
 
-
   document
     .querySelectorAll(
-      `input[data-variable="${CSS.escape(variableCode)}"]`
+      `input[data-variable="${CSS.escape(
+        variableCode
+      )}"]`
     )
     .forEach(input => {
-
       input.checked =
         selected.includes(
           input.dataset.code
         );
     });
 
-
-  updateSelectionCount(
+  updateFilterCard(
     variableCode
   );
 }
 
 
 /* =========================================================
-   EJECUTAR CONSULTA
+   CONSULTA
    ========================================================= */
 
 async function executeQuery() {
-
   const result =
     document.querySelector(
       '#result'
     );
-
 
   const status =
     document.querySelector(
       '#status'
     );
 
-
   const button =
     document.querySelector(
       '#show-data'
     );
-
 
   const csvButton =
     document.querySelector(
       '#download-csv'
     );
 
-
-  /*
-   * Comprobamos que todas las variables
-   * tengan al menos una selección.
-   */
   const empty =
     state.metadata.variables
-      .filter(variable =>
-        getSelected(variable.code).length === 0
+      .filter(
+        variable =>
+          getSelected(
+            variable.code
+          ).length === 0
       );
 
-
   if (empty.length) {
-
     result.innerHTML = `
-
-      <div class="api-error">
+      <div class="message message-error">
 
         <strong>
           Faltan selecciones
@@ -1631,111 +1607,85 @@ async function executeQuery() {
         </p>
 
         <ul>
-
-          ${
-            empty
-              .map(
-                variable =>
-                  `<li>${escapeHtml(
-                    variable.text ||
-                    variable.code
-                  )}</li>`
-              )
-              .join('')
-          }
-
+          ${empty
+            .map(
+              variable =>
+                `<li>${escapeHtml(
+                  variable.text ||
+                  variable.code
+                )}</li>`
+            )
+            .join('')}
         </ul>
 
       </div>
-
     `;
 
     return;
   }
 
-
   button.disabled = true;
-
   csvButton.disabled = true;
-
-
-  result.innerHTML = `
-
-    <div class="loading">
-      Consultando Eustat...
-    </div>
-
-  `;
-
 
   status.innerHTML = '';
 
+  result.innerHTML = `
+    <div class="loading-card">
+      Consultando Eustat…
+    </div>
+  `;
 
   const query =
     buildQuery();
 
-
   try {
-
     const response =
       await postQuery(
         state.table.id,
         query
       );
 
-
     const parsed =
       parseJsonStat(response);
-
 
     state.result =
       parsed;
 
-
-    renderResult(
-      parsed
-    );
-
+    renderResult(parsed);
 
     csvButton.disabled = false;
 
-
     status.innerHTML = `
-
-      <div class="api-ok">
+      <div class="message message-success">
 
         Datos obtenidos directamente
         de la API de Eustat.
 
-        ${
-          parsed.rows.length.toLocaleString(
+        <strong>
+          ${parsed.rows.length.toLocaleString(
             'es-ES'
-          )
-        }
+          )}
+        </strong>
         observaciones.
 
       </div>
-
     `;
 
-
   } catch (error) {
-
     state.result = null;
 
-
     result.innerHTML = `
-
-      <div class="api-error">
+      <div class="message message-error">
 
         <strong>
           Error al consultar Eustat
         </strong>
 
         <p>
-          ${escapeHtml(error.message)}
+          ${escapeHtml(
+            error.message
+          )}
         </p>
-
 
         <details>
 
@@ -1745,12 +1695,7 @@ async function executeQuery() {
 
           <pre>${escapeHtml(
             JSON.stringify(
-              {
-                query,
-                response: {
-                  format: 'json-stat'
-                }
-              },
+              getQueryObject(),
               null,
               2
             )
@@ -1759,51 +1704,34 @@ async function executeQuery() {
         </details>
 
       </div>
-
     `;
 
   } finally {
-
     button.disabled = false;
   }
 }
 
 
 /* =========================================================
-   RENDER RESULTADO
+   RESULTADO
    ========================================================= */
 
 function renderResult(parsed) {
-
   const result =
     document.querySelector(
       '#result'
     );
 
-
   if (!parsed.rows.length) {
-
     result.innerHTML = `
-
-      <div class="table-placeholder">
+      <div class="result-placeholder">
         La consulta no ha devuelto datos.
       </div>
-
     `;
 
     return;
   }
 
-
-  /*
-   * Tabla genérica:
-   *
-   * una columna por dimensión
-   * + columna Valor
-   *
-   * Más adelante podremos añadir la vista
-   * pivotada estilo Statbank.
-   */
   const headers =
     parsed.dimensions
       .map(
@@ -1813,7 +1741,6 @@ function renderResult(parsed) {
           )}</th>`
       )
       .join('');
-
 
   const body =
     parsed.rows
@@ -1834,136 +1761,92 @@ function renderResult(parsed) {
             )
             .join('');
 
-
         return `
-
           <tr>
 
             ${cells}
 
-            <td class="numeric">
-
+            <td class="numeric-cell">
               ${escapeHtml(
                 formatNumber(
                   row.value
                 )
               )}
-
             </td>
 
           </tr>
-
         `;
       })
       .join('');
 
-
   result.innerHTML = `
-
-    <div class="result-info">
+    <div class="result-summary">
 
       <strong>
-        ${parsed.rows.length.toLocaleString('es-ES')}
-        observaciones
+        ${parsed.rows.length.toLocaleString(
+          'es-ES'
+        )}
       </strong>
+
+      observaciones
 
     </div>
 
+    <div class="result-table-wrap">
 
-    <div class="table-scroll">
-
-      <table class="data-table">
+      <table class="result-table">
 
         <thead>
-
           <tr>
-
             ${headers}
-
-            <th>
-              Valor
-            </th>
-
+            <th>Valor</th>
           </tr>
-
         </thead>
 
-
         <tbody>
-
           ${body}
-
         </tbody>
 
       </table>
 
     </div>
-
   `;
 }
 
 
 /* =========================================================
-   CONSULTA API
+   COPIAR CONSULTA
    ========================================================= */
 
-function getQueryObject() {
-
-  return {
-
-    query:
-      buildQuery(),
-
-    response: {
-      format: 'json-stat'
-    }
-
-  };
-}
-
-
 async function copyQuery() {
-
-  const query =
-    getQueryObject();
-
-
   const text =
     JSON.stringify(
-      query,
+      getQueryObject(),
       null,
       2
     );
 
-
   try {
-
     await navigator.clipboard.writeText(
       text
     );
-
 
     showStatus(
       'Consulta copiada al portapapeles.'
     );
 
-
   } catch {
-
     const textarea =
       document.createElement(
         'textarea'
       );
 
-
     textarea.value =
       text;
-
 
     document.body.appendChild(
       textarea
     );
-
 
     textarea.select();
 
@@ -1971,9 +1854,7 @@ async function copyQuery() {
       'copy'
     );
 
-
     textarea.remove();
-
 
     showStatus(
       'Consulta copiada al portapapeles.'
@@ -1983,26 +1864,18 @@ async function copyQuery() {
 
 
 function showStatus(message) {
-
   const status =
     document.querySelector(
       '#status'
     );
 
-
   if (!status) return;
 
-
   status.innerHTML = `
-
-    <div class="api-ok">
-
+    <div class="message message-success">
       ${escapeHtml(message)}
-
     </div>
-
   `;
-
 
   setTimeout(
     () => {
@@ -2018,10 +1891,8 @@ function showStatus(message) {
    ========================================================= */
 
 function csvEscape(value) {
-
   const text =
     String(value ?? '');
-
 
   if (
     text.includes(';') ||
@@ -2029,95 +1900,69 @@ function csvEscape(value) {
     text.includes('\n') ||
     text.includes('\r')
   ) {
-
     return `"${text.replace(
       /"/g,
       '""'
     )}"`;
   }
 
-
   return text;
 }
 
 
 function createCSV() {
-
   if (!state.result) {
     return '';
   }
 
-
   const dimensions =
     state.result.dimensions;
 
+  const lines = [];
 
-  const header = [
-
-    ...dimensions.map(
-      dimension =>
-        dimension.label
-    ),
-
-    'Valor'
-
-  ];
-
-
-  const lines = [
-
-    header
+  lines.push(
+    [
+      ...dimensions.map(
+        dimension =>
+          dimension.label
+      ),
+      'Valor'
+    ]
       .map(csvEscape)
       .join(';')
-
-  ];
-
+  );
 
   for (
     const row
     of state.result.rows
   ) {
-
-    const values = [
-
-      ...dimensions.map(
-        dimension =>
-          row.values[
-            dimension.id
-          ]
-      ),
-
-      row.value
-
-    ];
-
-
     lines.push(
-      values
+      [
+        ...dimensions.map(
+          dimension =>
+            row.values[
+              dimension.id
+            ]
+        ),
+        row.value
+      ]
         .map(csvEscape)
         .join(';')
     );
   }
 
-
-  /*
-   * BOM UTF-8 para Excel.
-   */
-  return '\uFEFF' +
-    lines.join('\r\n');
+  return (
+    '\uFEFF' +
+    lines.join('\r\n')
+  );
 }
 
 
 function downloadCSV() {
-
-  if (!state.result) {
-    return;
-  }
-
+  if (!state.result) return;
 
   const csv =
     createCSV();
-
 
   const blob =
     new Blob(
@@ -2128,22 +1973,18 @@ function downloadCSV() {
       }
     );
 
-
   const url =
     URL.createObjectURL(
       blob
     );
-
 
   const link =
     document.createElement(
       'a'
     );
 
-
   link.href =
     url;
-
 
   link.download =
     `${state.table.id.replace(
@@ -2151,17 +1992,13 @@ function downloadCSV() {
       ''
     )}.csv`;
 
-
   document.body.appendChild(
     link
   );
 
-
   link.click();
 
-
   link.remove();
-
 
   URL.revokeObjectURL(
     url
@@ -2174,35 +2011,28 @@ function downloadCSV() {
    ========================================================= */
 
 function renderError(error) {
-
   app.innerHTML = `
+    <main class="error-page">
 
-    <main class="catalog">
+      <div class="error-card">
 
-      <div class="catalog-inner">
+        <h1>
+          Se ha producido un error
+        </h1>
 
-        <div class="api-error">
+        <p>
+          ${escapeHtml(
+            error.message
+          )}
+        </p>
 
-          <strong>
-            Se ha producido un error
-          </strong>
-
-          <p>
-            ${escapeHtml(
-              error.message
-            )}
-          </p>
-
-          <a href="#/">
-            ← Volver al catálogo
-          </a>
-
-        </div>
+        <a href="#/">
+          ← Volver al catálogo
+        </a>
 
       </div>
 
     </main>
-
   `;
 }
 
@@ -2212,19 +2042,15 @@ function renderError(error) {
    ========================================================= */
 
 function route() {
-
   const hash =
     location.hash || '#/';
-
 
   const match =
     hash.match(
       /^#\/table\/(.+)$/
     );
 
-
   if (match) {
-
     openTable(
       decodeURIComponent(
         match[1]
@@ -2233,7 +2059,6 @@ function route() {
 
     return;
   }
-
 
   renderCatalog();
 }
@@ -2244,21 +2069,8 @@ function route() {
    ========================================================= */
 
 loadCatalog()
-
-  .then(() => {
-
-    route();
-
-  })
-
-  .catch(error => {
-
-    renderError(
-      error
-    );
-
-  });
-
+  .then(route)
+  .catch(renderError);
 
 window.addEventListener(
   'hashchange',
