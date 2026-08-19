@@ -1258,16 +1258,15 @@ function parseEustatJsonStat(json) {
     getDataset(json);
 
 
-  const dimensionIds =
-    Array.isArray(dataset.id)
-      ? dataset.id
-      : [];
+ const dimensionIds =
+   Array.isArray(dataset.dimension?.id)
+     ? dataset.dimension.id
+     : [];
 
-
-  const dimensionSizes =
-    Array.isArray(dataset.size)
-      ? dataset.size.map(Number)
-      : [];
+ const dimensionSizes =
+   Array.isArray(dataset.dimension?.size)
+     ? dataset.dimension.size
+     : [];
 
 
   const dimensionInfo =
