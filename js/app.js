@@ -1423,28 +1423,11 @@ function renderResult(parsed) {
       </table>
 
     </div>
-
-
-    <details class="api-query">
-
-      <summary>
-        Estructura JSON-stat recibida
-      </summary>
-
-      <pre>${escapeHtml(
-        JSON.stringify(
-          parsed,
-          null,
-          2
-        )
-      )}</pre>
-
-    </details>
   `;
 
 
   /*
-   * Ahora sí tenemos datos reales.
+   *  datos reales.
    */
 
   document
